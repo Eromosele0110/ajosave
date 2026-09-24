@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { ConfirmModal } from "@/components/ui/ConfirmModal";
+import { DestructiveConfirmModal } from "@/components/ui/DestructiveConfirmModal";
 
 interface Props {
   circleId: string;
@@ -145,10 +146,19 @@ export function CircleActions({ circleId, isCreator, isMember, status }: Props) 
 
       {error && <p style={{ fontSize: "var(--text-xs)", color: "var(--color-error)" }}>{error}</p>}
 
-      <ConfirmModal
+      <DestructiveConfirmModal
         open={modal === "cancel"}
+        type="danger"
         title="Cancel Circle"
-        message="Are you sure you want to cancel this circle? This action cannot be undone and all members will be notified."
+        message="Are you sure you want to cancel this circle? This action cannot be undone."
+        consequences={[
+          "All members will be immediately notified of the cancellation.",
+          "Any pending contributions will need to be refunded manually.",
+          "The circle and its payout schedule will be permanently removed.",
+          "This cannot be reversed — a new circle must be created if needed.",
+        ]}
+        confirmPhrase="CANCEL"
+        delay={3}
         confirmLabel="Yes, Cancel Circle"
         loading={loading}
         onConfirm={handleCancel}
