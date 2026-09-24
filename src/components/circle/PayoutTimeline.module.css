@@ -1,0 +1,345 @@
+/* ─── PayoutTimeline ──────────────────────────────────────────────────────────
+ * Mobile-first vertical timeline for payout rotation.
+ * Uses CSS vars from tokens.css — no Tailwind, no inline styles.
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.title {
+  font-size: var(--text-base);
+  font-weight: var(--font-semibold);
+  color: var(--color-text-primary);
+  margin: 0;
+}
+
+.count {
+  color: var(--color-text-muted);
+  font-weight: var(--font-normal);
+}
+
+/* ─── Timeline track ─────────────────────────────────────────────────────── */
+
+.timeline {
+  position: relative;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+/* Vertical connecting line behind the dots */
+.timeline::before {
+  content: "";
+  position: absolute;
+  left: 1.1875rem; /* (dot 1.5rem / 2) + item padding-left (0.875rem) */
+  top: var(--space-6);
+  bottom: var(--space-6);
+  width: 2px;
+  background: var(--color-border);
+  z-index: 0;
+}
+
+/* ─── Timeline item ──────────────────────────────────────────────────────── */
+
+.item {
+  position: relative;
+  display: grid;
+  /* dot | content */
+  grid-template-columns: 2rem 1fr;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-3);
+  border-radius: var(--radius-lg);
+  border: 1px solid transparent;
+  background: var(--color-bg-elevated);
+  transition:
+    border-color var(--transition-fast),
+    background var(--transition-fast);
+  /* Touch-friendly: minimum 44px tap target height */
+  min-height: 44px;
+  /* Slightly overlap lines */
+  margin-bottom: var(--space-2);
+  z-index: 1;
+}
+
+.item:last-child {
+  margin-bottom: 0;
+}
+
+/* ─── Status variants ────────────────────────────────────────────────────── */
+
+.itemCurrent {
+  background: rgba(15, 122, 74, 0.12);
+  border-color: var(--color-brand-primary);
+}
+
+.itemPast {
+  opacity: 0.55;
+}
+
+.itemMe {
+  border-color: var(--color-brand-accent);
+  background: rgba(245, 166, 35, 0.07);
+}
+
+/* ─── Dot / cycle indicator ──────────────────────────────────────────────── */
+
+.dot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: var(--radius-full);
+  background: var(--color-bg);
+  border: 2px solid var(--color-border);
+  font-size: var(--text-xs);
+  font-weight: var(--font-bold);
+  color: var(--color-brand-accent);
+  flex-shrink: 0;
+  z-index: 2;
+  position: relative;
+}
+
+.itemCurrent .dot {
+  background: var(--color-brand-primary);
+  border-color: var(--color-brand-primary);
+  color: #fff;
+  box-shadow: 0 0 0 4px rgba(15, 122, 74, 0.2);
+}
+
+.itemPast .dot {
+  background: var(--color-bg-elevated);
+  border-color: var(--color-border);
+  color: var(--color-text-muted);
+}
+
+/* ─── Content area ───────────────────────────────────────────────────────── */
+
+.content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0; /* allow text-overflow to work */
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.memberInfo {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1;
+  min-width: 0;
+}
+
+.memberName {
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  max-width: 160px;
+}
+
+.youBadge {
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  color: var(--color-brand-accent);
+  background: rgba(245, 166, 35, 0.15);
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.cycleLabel {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+
+.datetime {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+/* ─── Status badges ──────────────────────────────────────────────────────── */
+
+.statusBadges {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-top: var(--space-1);
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+}
+
+.tagActive {
+  background: rgba(15, 122, 74, 0.2);
+  color: var(--color-brand-primary);
+}
+
+.tagDone {
+  background: rgba(59, 130, 246, 0.15);
+  color: var(--color-info);
+}
+
+.tagUpcoming {
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
+}
+
+/* ─── Show all toggle ────────────────────────────────────────────────────── */
+
+.toggleButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  width: 100%;
+  /* min 44px touch target */
+  min-height: 44px;
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+  cursor: pointer;
+  transition:
+    border-color var(--transition-fast),
+    background var(--transition-fast);
+}
+
+.toggleButton:hover {
+  border-color: var(--color-brand-primary);
+  background: rgba(15, 122, 74, 0.06);
+  color: var(--color-text-primary);
+}
+
+.toggleButton:focus-visible {
+  outline: 2px solid var(--color-brand-primary);
+  outline-offset: 2px;
+}
+
+/* ─── Skeleton loading ───────────────────────────────────────────────────── */
+
+.skeletonItem {
+  display: grid;
+  grid-template-columns: 2rem 1fr;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--color-bg-elevated);
+  border-radius: var(--radius-lg);
+  border: 1px solid transparent;
+  min-height: 44px;
+  margin-bottom: var(--space-2);
+}
+
+.skeletonItem:last-child {
+  margin-bottom: 0;
+}
+
+.skeletonDot {
+  width: 2rem;
+  height: 2rem;
+  border-radius: var(--radius-full);
+  background: var(--color-border);
+  animation: pulse 1.5s infinite ease-in-out;
+}
+
+.skeletonContent {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  justify-content: center;
+}
+
+.skeletonLine {
+  height: 12px;
+  border-radius: var(--radius-sm);
+  background: var(--color-border);
+  animation: pulse 1.5s infinite ease-in-out;
+}
+
+.skeletonLineShort {
+  width: 60%;
+}
+
+.skeletonLineLong {
+  width: 85%;
+}
+
+@keyframes pulse {
+  0% { opacity: 0.4; }
+  50% { opacity: 1; }
+  100% { opacity: 0.4; }
+}
+
+/* ─── Mobile breakpoint (≤ 640px) ────────────────────────────────────────── */
+
+@media (max-width: 640px) {
+  .item {
+    /* tighter horizontal padding on small screens */
+    padding: var(--space-2) var(--space-2);
+    gap: var(--space-2);
+    /* ensure 44px minimum for touch */
+    min-height: 44px;
+  }
+
+  .memberName {
+    /* shrink max-width so name truncates gracefully on small screens */
+    max-width: 110px;
+  }
+
+  .datetime {
+    /* allow wrapping on very narrow screens */
+    white-space: normal;
+    word-break: break-word;
+  }
+
+  .timeline::before {
+    /* adjust line position for tighter padding */
+    left: 1rem;
+  }
+
+  .tag {
+    font-size: 10px;
+    padding: 1px var(--space-1);
+  }
+
+  .toggleButton {
+    font-size: var(--text-sm);
+  }
+}

@@ -113,3 +113,50 @@
 }
 
 .empty { font-size: var(--text-sm); color: var(--color-text-muted); }
+
+/* ─── Mobile breakpoint (≤ 640px) ────────────────────────────────────────── */
+
+@media (max-width: 640px) {
+  .header {
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .item {
+    /* tighter padding on small screens */
+    padding: var(--space-2) var(--space-3);
+    gap: var(--space-2);
+    /* ensure 44px min touch target */
+    min-height: 44px;
+  }
+
+  .memberName {
+    /* truncate long names on narrow screens */
+    max-width: 120px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .statusTag {
+    /* don't force tag to right on very small screens — stack below */
+    margin-left: 0;
+    margin-top: var(--space-1);
+  }
+
+  .tag {
+    font-size: 10px;
+    padding: 1px var(--space-1);
+  }
+
+  .cycle {
+    /* slightly smaller cycle badge */
+    width: 1.75rem;
+    height: 1.75rem;
+    font-size: 10px;
+  }
+
+  .list {
+    gap: var(--space-2);
+  }
+}
