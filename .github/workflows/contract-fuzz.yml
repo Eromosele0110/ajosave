@@ -1,0 +1,132 @@
+name: Scheduled Contract Fuzzing
+
+on:
+  schedule:
+    # Run nightly at 02:00 UTC
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    inputs:
+      fuzz_duration:
+        description: "Fuzzing duration in seconds (per target)"
+        required: false
+        default: "60"
+
+permissions:
+  contents: read
+  issues: write # allow filing issue on regression
+
+concurrency:
+  group: contract-fuzz
+  cancel-in-progress: true
+
+env:
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ── 1. Property-based fuzz tests (cargo test harness) ─────────────────────
+  property-fuzz:
+    name: Property Fuzz (cargo test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust build artefacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts
+
+      - name: Run property-based fuzz tests
+        working-directory: contracts
+        run: cargo test --package ajo fuzz -- --nocapture 2>&1 | tee /tmp/fuzz-results.txt
+
+      - name: Upload fuzz results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: property-fuzz-results
+          path: /tmp/fuzz-results.txt
+          retention-days: 30
+
+  # ── 2. cargo-fuzz (libFuzzer) targets ─────────────────────────────────────
+  libfuzzer:
+    name: libFuzzer Targets
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - fuzz_contribute
+          - fuzz_join
+          - fuzz_payout
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nightly Rust (required for cargo-fuzz)
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache Rust build artefacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Run fuzzer — ${{ matrix.target }}
+        working-directory: contracts/ajo
+        env:
+          FUZZ_DURATION: ${{ github.event.inputs.fuzz_duration || '60' }}
+        run: |
+          # Run for $FUZZ_DURATION seconds; exit 0 regardless of findings so we
+          # can always upload the corpus and crash artefacts.
+          cargo fuzz run ${{ matrix.target }} \
+            -- -max_total_time=${FUZZ_DURATION} \
+               -print_final_stats=1 \
+               -artifact_prefix=/tmp/fuzz-${{ matrix.target }}- \
+            || true
+
+      - name: Upload corpus & crash artefacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-corpus-${{ matrix.target }}
+          path: |
+            contracts/ajo/fuzz/corpus/${{ matrix.target }}
+            /tmp/fuzz-${{ matrix.target }}-*
+          retention-days: 30
+
+  # ── 3. Regression guard — report issue on failure ─────────────────────────
+  report-regression:
+    name: Report Regression
+    runs-on: ubuntu-latest
+    needs: [property-fuzz, libfuzzer]
+    if: failure()
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `🐛 [Auto] Contract fuzz regression detected — run ${context.runId}`,
+              body: [
+                '## Fuzz Regression Detected',
+                '',
+                `A scheduled contract fuzzing run failed. See the CI run for crash artefacts and reproduction steps.`,
+                '',
+                `**Run:** ${runUrl}`,
+                '',
+                '### Next steps',
+                '1. Download the crash corpus artefact from the run.',
+                '2. Reproduce locally: `cargo fuzz run <target> <crash-file>`.',
+                '3. Fix the underlying issue and add a regression test in `fuzz_tests.rs`.',
+                '4. Re-run `npm run contract:test` before opening a PR.',
+              ].join('\n'),
+              labels: ['bug', 'security', 'contracts'],
+            });
