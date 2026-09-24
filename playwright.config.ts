@@ -55,5 +55,22 @@ export default defineConfig({
         },
       },
     },
+    // Visual regression tests — tablet viewport (iPad Mini)
+    {
+      name: "visual-tablet",
+      testMatch: /e2e\/visual\/.*\.visual\.spec\.ts/,
+      use: {
+        ...devices["iPad Mini"],
+        // Disable animations so screenshots are deterministic
+        launchOptions: { args: ["--force-prefers-reduced-motion"] },
+      },
+      expect: {
+        toHaveScreenshot: {
+          maxDiffPixelRatio: 0.001,
+          snapshotPathTemplate:
+            "{testDir}/visual/__snapshots__/{projectName}/{testFilePath}/{arg}{ext}",
+        },
+      },
+    },
   ],
 });
