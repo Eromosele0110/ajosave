@@ -59,16 +59,23 @@ export default function LoginPage() {
     <div className={styles.page}>
       <div className={`container container--sm ${styles.inner}`}>
         <div className="card">
-          <h1 className={styles.title}>
+          <h1 className={styles.title} id="login-heading">
             {step === "phone" ? "Sign in to STELLAR" : "Enter your OTP"}
           </h1>
-          <p className={styles.subtitle}>
+          <p className={styles.subtitle} id="login-subtitle">
             {step === "phone"
               ? "Enter your phone number to receive a one-time code."
               : `We sent a 6-digit code to ${phone}.`}
           </p>
+
           {step === "phone" ? (
-            <form onSubmit={handleSendOtp} className={styles.form} noValidate>
+            <form
+              onSubmit={handleSendOtp}
+              className={styles.form}
+              noValidate
+              aria-labelledby="login-heading"
+              aria-describedby="login-subtitle"
+            >
               <Input
                 label="Phone Number"
                 type="tel"
@@ -76,14 +83,26 @@ export default function LoginPage() {
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
                 required
+                autoComplete="tel"
+                autoFocus
               />
-              {error && <p className={styles.error}>{error}</p>}
+              {error && (
+                <p className={styles.error} role="alert" aria-live="assertive">
+                  {error}
+                </p>
+              )}
               <Button type="submit" fullWidth loading={loading}>
                 Send Code
               </Button>
             </form>
           ) : (
-            <form onSubmit={handleVerifyOtp} className={styles.form} noValidate>
+            <form
+              onSubmit={handleVerifyOtp}
+              className={styles.form}
+              noValidate
+              aria-labelledby="login-heading"
+              aria-describedby="login-subtitle"
+            >
               <Input
                 label="6-Digit Code"
                 type="text"
@@ -93,15 +112,25 @@ export default function LoginPage() {
                 value={otp}
                 onChange={(e) => setOtp(e.target.value)}
                 required
+                autoComplete="one-time-code"
+                autoFocus
+                hint="Enter the 6-digit code sent to your phone"
               />
-              {error && <p className={styles.error}>{error}</p>}
+              {error && (
+                <p className={styles.error} role="alert" aria-live="assertive">
+                  {error}
+                </p>
+              )}
               <Button type="submit" fullWidth loading={loading}>
                 Verify &amp; Sign In
               </Button>
               <button
                 type="button"
                 className="btn btn--ghost btn--sm btn--full"
-                onClick={() => setStep("phone")}
+                onClick={() => {
+                  setStep("phone");
+                  setError(null);
+                }}
               >
                 Change number
               </button>

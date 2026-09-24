@@ -43,13 +43,19 @@ export function CreateCircleForm() {
   };
 
   return (
-    <form className={styles.form} onSubmit={handleSubmit(onSubmit)} noValidate>
+    <form
+      className={styles.form}
+      onSubmit={handleSubmit(onSubmit)}
+      noValidate
+      aria-label="Create a new savings circle"
+    >
       <h2 className={styles.title}>Create a Circle</h2>
 
       <Input
         label="Circle Name"
         placeholder="e.g. Lagos Girls Monthly Ajo"
         error={errors.name?.message}
+        required
         {...register("name")}
       />
 
@@ -58,6 +64,8 @@ export function CreateCircleForm() {
         type="number"
         placeholder="10000"
         error={errors.contributionNgn?.message}
+        required
+        hint="Minimum contribution amount in Nigerian Naira"
         {...register("contributionNgn", { valueAsNumber: true })}
       />
 
@@ -68,21 +76,40 @@ export function CreateCircleForm() {
         min={2}
         max={20}
         error={errors.maxMembers?.message}
+        required
+        hint="Between 2 and 20 members"
         {...register("maxMembers", { valueAsNumber: true })}
       />
 
       <div className="input-group">
         <label className="input-label" htmlFor="cycleFrequency">
           Cycle Frequency
+          <span aria-hidden="true" style={{ color: "var(--color-error)", marginLeft: "0.25em" }}>
+            *
+          </span>
         </label>
-        <select id="cycleFrequency" className="input" {...register("cycleFrequency")}>
+        <select
+          id="cycleFrequency"
+          className="input"
+          aria-required="true"
+          {...register("cycleFrequency")}
+        >
           <option value="weekly">Weekly</option>
           <option value="biweekly">Bi-weekly</option>
           <option value="monthly">Monthly</option>
         </select>
+        {errors.cycleFrequency?.message && (
+          <span className="input-error-msg" role="alert" aria-live="polite">
+            {errors.cycleFrequency.message}
+          </span>
+        )}
       </div>
 
-      {error && <p className={styles.error}>{error}</p>}
+      {error && (
+        <p className={styles.error} role="alert" aria-live="assertive">
+          {error}
+        </p>
+      )}
 
       <Button type="submit" fullWidth loading={loading}>
         Create Circle
