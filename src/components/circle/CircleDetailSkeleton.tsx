@@ -2,7 +2,8 @@ import styles from "@/app/circles/[id]/page.module.css";
 
 export function CircleDetailSkeleton() {
   return (
-    <div className={styles.page}>
+    <div className={styles.page} aria-busy="true" aria-label="Loading circle details…">
+      <span className="sr-only" role="status">Loading circle details…</span>
       <div className="container">
         <div className={styles.header}>
           <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>

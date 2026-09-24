@@ -1,8 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { Button } from "@/components/ui/Button";
-import styles from "../error.module.css";
+import { ErrorState } from "@/components/ui/ErrorState";
 
 export default function DashboardError({
   error,
@@ -12,18 +11,16 @@ export default function DashboardError({
   reset: () => void;
 }) {
   useEffect(() => {
-    console.error(error);
+    // Log to console in dev; Sentry/observability picks this up in production
+    console.error("[DashboardError]", error);
   }, [error]);
 
   return (
-    <div className={styles.container}>
-      <div className={styles.inner}>
-        <h2 className={styles.title}>Failed to load dashboard</h2>
-        <p className={styles.message}>
-          We couldn&apos;t load your circles. Please try again.
-        </p>
-        <Button onClick={reset}>Try again</Button>
-      </div>
-    </div>
+    <ErrorState
+      title="Failed to load dashboard"
+      message="We couldn't load your circles. Please check your connection and try again."
+      onRetry={reset}
+      showHomeLink
+    />
   );
 }

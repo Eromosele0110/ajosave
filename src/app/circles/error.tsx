@@ -1,8 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { Button } from "@/components/ui/Button";
-import styles from "../error.module.css";
+import { ErrorState } from "@/components/ui/ErrorState";
 
 export default function CirclesError({
   error,
@@ -12,18 +11,15 @@ export default function CirclesError({
   reset: () => void;
 }) {
   useEffect(() => {
-    console.error(error);
+    console.error("[CirclesError]", error);
   }, [error]);
 
   return (
-    <div className={styles.container}>
-      <div className={styles.inner}>
-        <h2 className={styles.title}>Failed to load circles</h2>
-        <p className={styles.message}>
-          We couldn&apos;t fetch the circles. Please try again.
-        </p>
-        <Button onClick={reset}>Try again</Button>
-      </div>
-    </div>
+    <ErrorState
+      title="Failed to load circles"
+      message="We couldn't fetch the savings circles. Please check your connection and try again."
+      onRetry={reset}
+      showHomeLink
+    />
   );
 }
