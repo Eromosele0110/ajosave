@@ -112,3 +112,45 @@ ol {
   0%   { background-position: 200% 0; }
   100% { background-position: -200% 0; }
 }
+
+/* ─── Reduced-motion support ──────────────────────────────────────────────── */
+/*
+ * Respect the operating-system / browser "prefers-reduced-motion" setting.
+ *
+ * Users who enable this preference (e.g. those with vestibular disorders,
+ * epilepsy, or other motion sensitivities) should not be subjected to
+ * animations that could cause discomfort or harm.
+ *
+ * Strategy:
+ *  1. Globally disable all animations and transitions.
+ *  2. Override the skeleton loader so it falls back to a static tinted
+ *     background instead of the moving shimmer.
+ *  3. Collapse scroll-behavior to `auto` so page anchors jump instantly
+ *     rather than smoothly scrolling.
+ *  4. Preserve functional transitions (e.g. focus ring) that carry
+ *     semantic meaning — these are already short enough to be acceptable,
+ *     but we zero them out here for maximum safety.
+ */
+@media (prefers-reduced-motion: reduce) {
+  /* Kill all animations and transitions site-wide */
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* Static fallback for the skeleton loader — replace gradient animation
+     with a solid mid-tone that still signals "loading" without movement */
+  .skeleton {
+    background: var(--color-bg-elevated);
+    animation: none;
+  }
+
+  /* Ensure smooth-scroll on <html> does not override the rule above */
+  html {
+    scroll-behavior: auto;
+  }
+}
