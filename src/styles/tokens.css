@@ -76,6 +76,7 @@
   /* Transitions */
   --transition-fast: 120ms ease;
   --transition-base: 200ms ease;
+  --transition-normal: 200ms ease;
 
   /* Layout */
   --max-width-xl: 1280px;
