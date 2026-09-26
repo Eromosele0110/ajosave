@@ -8,6 +8,7 @@ import { randomUUID } from "crypto";
 import logger from "@/lib/logger";
 import { runWithCorrelationId } from "@/lib/correlation";
 import { sanitizeBody } from "@/lib/sanitize";
+import { isAppError, internalError } from "@/lib/errors";
 
 type Handler = (_req: NextRequest, _ctx?: any) => Promise<NextResponse>;
 
@@ -67,18 +68,27 @@ export function withErrorHandler(handler: Handler): Handler {
         return response;
       } catch (err) {
         const durationMs = Date.now() - start;
-        Sentry.captureException(err, { extra: { url: req.url, method: req.method, correlationId } });
+
+        // Resolve to AppError — known operational errors skip Sentry capture
+        const appErr = isAppError(err) ? err : internalError();
+
+        if (!isAppError(err)) {
+          // Only capture truly unexpected errors in Sentry
+          Sentry.captureException(err, {
+            extra: { url: req.url, method: req.method, correlationId },
+          });
+        }
+
         reqLogger.error({
           method: req.method,
           path: pathname,
-          statusCode: 500,
+          statusCode: appErr.statusCode,
           durationMs,
           err,
         });
-        const res = NextResponse.json<ApiError>(
-          { success: false, error: "Internal server error", code: "INTERNAL_ERROR" },
-          { status: 500 }
-        );
+
+        const body: ApiError & { details?: unknown } = appErr.toJSON();
+        const res = NextResponse.json<ApiError>(body, { status: appErr.statusCode });
         res.headers.set("x-correlation-id", correlationId);
         return res;
       }
