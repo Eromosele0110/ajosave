@@ -7,12 +7,25 @@ import {
 import { getMissedContributions } from "./contribution.service";
 import type { Circle, Member } from "@/types";
 import { addPayoutJob } from "@/lib/queue/payoutQueue";
+import { withCronLock, CronLockError } from "./cron-lock";
 
 /**
  * Send payout reminders 24 hours before scheduled payouts
  * This should be called by a cron job every hour
  */
 export async function sendPayoutReminders(): Promise<void> {
+  try {
+    await withCronLock("sendPayoutReminders", _sendPayoutReminders);
+  } catch (err) {
+    if (err instanceof CronLockError) {
+      console.warn(`[scheduler] ${err.message}`);
+    } else {
+      throw err;
+    }
+  }
+}
+
+async function _sendPayoutReminders(): Promise<void> {
   // Find circles with payouts due in 23-25 hours
   const { rows: circles } = await query<Circle>(
     `SELECT * FROM circles 
@@ -62,6 +75,18 @@ export async function sendPayoutReminders(): Promise<void> {
  * This should be called by a cron job daily.
  */
 export async function processMissedContributions(): Promise<void> {
+  try {
+    await withCronLock("processMissedContributions", _processMissedContributions);
+  } catch (err) {
+    if (err instanceof CronLockError) {
+      console.warn(`[scheduler] ${err.message}`);
+    } else {
+      throw err;
+    }
+  }
+}
+
+async function _processMissedContributions(): Promise<void> {
   // Find active circles where the grace period has elapsed
   const { rows: circles } = await query<Circle & { gracePeriodHours: number }>(
     `SELECT *, grace_period_hours as "gracePeriodHours" FROM circles 
@@ -136,6 +161,18 @@ const WINDOWS: ReminderWindow[] = [
  * Per-circle errors are caught and logged; they do not abort the run.
  */
 export async function sendContributionReminders(): Promise<void> {
+  try {
+    await withCronLock("sendContributionReminders", _sendContributionReminders);
+  } catch (err) {
+    if (err instanceof CronLockError) {
+      console.warn(`[scheduler] ${err.message}`);
+    } else {
+      throw err;
+    }
+  }
+}
+
+async function _sendContributionReminders(): Promise<void> {
   for (const { hoursLeft, lowerHours, upperHours } of WINDOWS) {
     const reminderType = `${hoursLeft}h`;
 
@@ -220,6 +257,18 @@ export async function sendContributionReminders(): Promise<void> {
  * This keeps the cron handler lightweight and moves long-running work to background workers.
  */
 export async function processDueCycles(): Promise<void> {
+  try {
+    await withCronLock("processDueCycles", _processDueCycles);
+  } catch (err) {
+    if (err instanceof CronLockError) {
+      console.warn(`[scheduler] ${err.message}`);
+    } else {
+      throw err;
+    }
+  }
+}
+
+async function _processDueCycles(): Promise<void> {
   const { rows: circles } = await query<{ id: string; currentCycle: number }>(
     `SELECT id, current_cycle as "currentCycle" FROM circles
      WHERE status = 'active' AND next_payout_at IS NOT NULL AND next_payout_at <= NOW()`
