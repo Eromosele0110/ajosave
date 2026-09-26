@@ -7,21 +7,29 @@ import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useFormPersistence } from "@/hooks/useFormPersistence";
 import styles from "./CreateCircleForm.module.css";
+
+const FORM_STORAGE_KEY = "create-circle";
 
 export function CreateCircleForm() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const form = useForm<CreateCircleInput>({
+    resolver: zodResolver(createCircleSchema),
+    defaultValues: { cycleFrequency: "monthly" },
+  });
+
   const {
     register,
     handleSubmit,
     formState: { errors },
-  } = useForm<CreateCircleInput>({
-    resolver: zodResolver(createCircleSchema),
-    defaultValues: { cycleFrequency: "monthly" },
-  });
+  } = form;
+
+  // Persist form values to sessionStorage so they survive navigation / refresh.
+  const { clearPersistedForm } = useFormPersistence(form, FORM_STORAGE_KEY);
 
   const onSubmit = async (data: CreateCircleInput) => {
     setLoading(true);
@@ -34,6 +42,8 @@ export function CreateCircleForm() {
       });
       const json = await res.json();
       if (!json.success) throw new Error(json.error);
+      // Clear the draft only after a successful submission.
+      clearPersistedForm();
       router.push(`/circles/${json.data.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
