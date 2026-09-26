@@ -11,6 +11,7 @@
   align-items: center;
   justify-content: space-between;
   height: 64px;
+  position: relative;
 }
 .logo {
   display: flex;
@@ -34,6 +35,8 @@
   font-weight: var(--font-bold);
   color: var(--color-text-primary);
 }
+
+/* Desktop links */
 .links {
   display: flex;
   align-items: center;
@@ -48,8 +51,119 @@
 .link:hover {
   color: var(--color-text-primary);
 }
+
+/* Hamburger toggle — hidden on desktop */
+.menuToggle {
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 5px;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: border-color var(--transition-fast);
+}
+.menuToggle:hover,
+.menuToggle:focus-visible {
+  border-color: var(--color-brand-primary);
+  outline: none;
+}
+
+.hamburgerLine {
+  display: block;
+  width: 20px;
+  height: 2px;
+  background: var(--color-text-primary);
+  border-radius: 2px;
+  transition: transform 0.25s ease, opacity 0.25s ease;
+  transform-origin: center;
+}
+
+/* Animated X when open */
+.lineTop {
+  transform: translateY(7px) rotate(45deg);
+}
+.lineMiddle {
+  opacity: 0;
+  transform: scaleX(0);
+}
+.lineBottom {
+  transform: translateY(-7px) rotate(-45deg);
+}
+
+/* Mobile drawer */
+.mobileMenu {
+  display: none;
+  position: absolute;
+  top: 64px;
+  left: 0;
+  right: 0;
+  background: rgba(8, 15, 11, 0.97);
+  backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--color-border-subtle);
+  padding: var(--space-4) 0;
+  transform: translateY(-8px);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 0.2s ease, opacity 0.2s ease;
+  z-index: 49;
+}
+.mobileMenuOpen {
+  transform: translateY(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+.mobileLinks {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0 var(--space-4);
+}
+.mobileLink {
+  display: block;
+  padding: var(--space-3) 0;
+  font-size: var(--text-base);
+  font-weight: var(--font-medium);
+  color: var(--color-text-secondary);
+  border-bottom: 1px solid var(--color-border-subtle);
+  transition: color var(--transition-fast);
+}
+.mobileLink:hover,
+.mobileLink:focus-visible {
+  color: var(--color-text-primary);
+  outline: none;
+}
+.mobileCta {
+  padding-top: var(--space-4);
+}
+.mobileCta a {
+  width: 100%;
+  justify-content: center;
+}
+
+/* Overlay backdrop */
+.overlay {
+  position: fixed;
+  inset: 0;
+  top: 64px;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 48;
+}
+
+/* Mobile breakpoint */
 @media (max-width: 640px) {
-  .links .link {
+  .links {
     display: none;
+  }
+  .menuToggle {
+    display: flex;
+  }
+  .mobileMenu {
+    display: block;
   }
 }
