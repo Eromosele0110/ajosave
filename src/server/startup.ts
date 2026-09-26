@@ -90,6 +90,17 @@ export async function shutdownServices(): Promise<void> {
   const { stopEventIndexer } = await import("./services/event-indexer.service");
   stopEventIndexer();
 
+  // Drain the BullMQ payout worker before closing the DB pool so that any
+  // in-flight job can complete its DB writes cleanly.
+  try {
+    const { shutdownWorker } = await import("@/lib/queue/worker");
+    await shutdownWorker();
+  } catch (err) {
+    // Worker may not have been started (e.g. in test environments) — log and
+    // continue so the rest of the shutdown sequence still runs.
+    console.warn("[startup] Worker shutdown warning:", err);
+  }
+
   await closePool();
 
   initialized = false;
