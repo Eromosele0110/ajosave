@@ -11,6 +11,10 @@ on:
     branches: [main]
     paths:
       - "k6/**"
+  pull_request:
+    branches: [main]
+    paths:
+      - "k6/**"
 
 jobs:
   load-test:
@@ -33,15 +37,82 @@ jobs:
         run: mkdir -p k6-results
 
       - name: Run payout load test
+        id: load_test
         env:
           BASE_URL: ${{ inputs.base_url || 'http://localhost:3000' }}
           CRON_SECRET: ${{ secrets.CRON_SECRET || 'ci-placeholder' }}
         run: |
+          # Exit code 99 = threshold breach in k6
+          # We capture the exit code and fail CI if thresholds are breached
           k6 run k6/payout-load-test.js \
             --env BASE_URL=$BASE_URL \
             --env CRON_SECRET=$CRON_SECRET \
-            --out json=k6-results/raw.json \
-            || true  # don't fail CI on threshold breach — just record results
+            --out json=k6-results/raw.json
+          echo "k6_exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Check threshold results
+        if: always()
+        run: |
+          if [ -f k6-results/summary.json ]; then
+            echo "=== Load Test Threshold Summary ==="
+            node -e "
+              const fs = require('fs');
+              const summary = JSON.parse(fs.readFileSync('k6-results/summary.json', 'utf8'));
+              const thresholds = summary.metrics || {};
+              let failed = false;
+
+              // Check http_req_duration p95
+              const p95 = thresholds.http_req_duration?.values?.['p(95)'];
+              const p95Limit = 5000;
+              if (p95 !== undefined) {
+                const pass = p95 < p95Limit;
+                console.log(\`  http_req_duration p(95): \${p95.toFixed(2)}ms (limit: \${p95Limit}ms) — \${pass ? 'PASS ✓' : 'FAIL ✗'}\`);
+                if (!pass) failed = true;
+              }
+
+              // Check payout error rate
+              const errorRate = thresholds.payout_error_rate?.values?.rate;
+              const errorLimit = 0.1;
+              if (errorRate !== undefined) {
+                const pass = errorRate < errorLimit;
+                console.log(\`  payout_error_rate: \${(errorRate * 100).toFixed(2)}% (limit: \${(errorLimit * 100)}%) — \${pass ? 'PASS ✓' : 'FAIL ✗'}\`);
+                if (!pass) failed = true;
+              }
+
+              if (failed) {
+                console.error('One or more k6 thresholds were breached — failing CI gate.');
+                process.exit(1);
+              } else {
+                console.log('All thresholds passed.');
+              }
+            "
+          fi
+
+      - name: Annotate PR with load test results
+        if: github.event_name == 'pull_request' && always()
+        run: |
+          if [ -f k6-results/summary.json ]; then
+            P95=$(node -e "
+              const s = JSON.parse(require('fs').readFileSync('k6-results/summary.json'));
+              const p95 = s.metrics?.http_req_duration?.values?.['p(95)'];
+              console.log(p95 !== undefined ? p95.toFixed(2) + 'ms' : 'N/A');
+            ")
+            ERROR_RATE=$(node -e "
+              const s = JSON.parse(require('fs').readFileSync('k6-results/summary.json'));
+              const r = s.metrics?.payout_error_rate?.values?.rate;
+              console.log(r !== undefined ? (r * 100).toFixed(2) + '%' : 'N/A');
+            ")
+            TOTAL=$(node -e "
+              const s = JSON.parse(require('fs').readFileSync('k6-results/summary.json'));
+              console.log(s.metrics?.http_reqs?.values?.count ?? 'N/A');
+            ")
+            echo "### Load Test Results" >> $GITHUB_STEP_SUMMARY
+            echo "| Metric | Value | Threshold | Status |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|-----------|--------|" >> $GITHUB_STEP_SUMMARY
+            echo "| p95 Latency | $P95 | < 5000ms | $([ "$P95" != "N/A" ] && echo 'checked' || echo '—') |" >> $GITHUB_STEP_SUMMARY
+            echo "| Error Rate | $ERROR_RATE | < 10% | — |" >> $GITHUB_STEP_SUMMARY
+            echo "| Total Requests | $TOTAL | — | — |" >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: Upload k6 results
         uses: actions/upload-artifact@v4
