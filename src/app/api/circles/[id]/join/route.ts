@@ -6,6 +6,7 @@ import { joinCircle, getCircleById } from "@/server/services/circle.service";
 import { withErrorHandler, withSanitizedBody } from "@/server/middleware";
 import { verifyInviteToken } from "@/lib/tokens";
 import { checkReputationGate } from "@/server/services/reputation.service";
+import { withAdvisoryLock, ConcurrencyError } from "@/lib/concurrency";
 import type { ApiResponse, Member } from "@/types";
 
 export const POST = withErrorHandler(withSanitizedBody(async (req: NextRequest, ctx: unknown) => {
@@ -75,6 +76,8 @@ export const POST = withErrorHandler(withSanitizedBody(async (req: NextRequest, 
     }
   }
 
-  const member = await joinCircle(params.id, userId, isInvited);
+  const member = await withAdvisoryLock("circle:join", params.id, () =>
+    joinCircle(params.id, userId, isInvited)
+  );
   return NextResponse.json<ApiResponse<Member>>({ success: true, data: member }, { status: 201 });
 }));
