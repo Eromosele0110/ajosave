@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { listOpenCircles } from "@/server/services/circle.service";
-import { CircleCard } from "@/components/circle/CircleCard";
+import { PaginatedCircleList } from "@/components/circle/PaginatedCircleList";
 import Link from "next/link";
 import styles from "./page.module.css";
 
@@ -27,11 +27,7 @@ export default async function CirclesPage() {
             </Link>
           </div>
         ) : (
-          <div className={styles.grid}>
-            {circles.map((circle) => (
-              <CircleCard key={circle.id} circle={circle} members={[]} showJoin />
-            ))}
-          </div>
+          <PaginatedCircleList circles={circles} />
         )}
       </div>
     </div>

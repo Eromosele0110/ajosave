@@ -1,51 +1,98 @@
 "use client";
 
-import { useRouter, useSearchParams } from "next/navigation";
 import styles from "./Pagination.module.css";
 
-interface Props {
+interface PaginationProps {
   page: number;
-  total: number;
-  limit: number;
+  totalPages: number;
+  hasNextPage: boolean;
+  hasPrevPage: boolean;
+  onNext: () => void;
+  onPrev: () => void;
+  onGoToPage: (_page: number) => void;
+  /** Optional label shown alongside controls, e.g. "Showing 1–12 of 48". */
+  label?: string;
 }
 
-export function Pagination({ page, total, limit }: Props) {
-  const router = useRouter();
-  const searchParams = useSearchParams();
-  const totalPages = Math.ceil(total / limit);
-
+/**
+ * Accessible pagination control bar.
+ *
+ * Renders prev/next buttons and a compact page-number list. The current page
+ * button has aria-current="page" for screen-reader compatibility.
+ */
+export function Pagination({
+  page,
+  totalPages,
+  hasNextPage,
+  hasPrevPage,
+  onNext,
+  onPrev,
+  onGoToPage,
+  label,
+}: PaginationProps) {
   if (totalPages <= 1) return null;
 
-  const go = (p: number) => {
-    const params = new URLSearchParams(searchParams.toString());
-    params.set("page", String(p));
-    router.push(`/circles?${params.toString()}`);
+  /**
+   * Build a smart page list: always show first, last, current ±1, and
+   * ellipsis gaps. Maximum 7 visible slots.
+   */
+  const buildPageList = (): (number | "…")[] => {
+    if (totalPages <= 7) {
+      return Array.from({ length: totalPages }, (_, i) => i + 1);
+    }
+    const pages: (number | "…")[] = [1];
+    const leftBound = Math.max(2, page - 1);
+    const rightBound = Math.min(totalPages - 1, page + 1);
+    if (leftBound > 2) pages.push("…");
+    for (let p = leftBound; p <= rightBound; p++) pages.push(p);
+    if (rightBound < totalPages - 1) pages.push("…");
+    pages.push(totalPages);
+    return pages;
   };
+
+  const pageList = buildPageList();
 
   return (
     <nav className={styles.nav} aria-label="Pagination">
-      <button
-        className={styles.btn}
-        onClick={() => go(page - 1)}
-        disabled={page <= 1}
-        aria-label="Previous page"
-      >
-        ← Prev
-      </button>
+      {label && <span className={styles.label}>{label}</span>}
 
-      <span className={styles.info}>
-        Page {page} of {totalPages}
-        <span className={styles.total}>({total} circles)</span>
-      </span>
+      <div className={styles.controls}>
+        <button
+          className={styles.btn}
+          onClick={onPrev}
+          disabled={!hasPrevPage}
+          aria-label="Previous page"
+        >
+          ‹
+        </button>
 
-      <button
-        className={styles.btn}
-        onClick={() => go(page + 1)}
-        disabled={page >= totalPages}
-        aria-label="Next page"
-      >
-        Next →
-      </button>
+        {pageList.map((item, idx) =>
+          item === "…" ? (
+            <span key={`ellipsis-${idx}`} className={styles.ellipsis} aria-hidden="true">
+              …
+            </span>
+          ) : (
+            <button
+              key={item}
+              className={`${styles.btn} ${item === page ? styles.active : ""}`}
+              onClick={() => onGoToPage(item as number)}
+              aria-label={`Page ${item}`}
+              aria-current={item === page ? "page" : undefined}
+            >
+              {item}
+            </button>
+          ),
+        )}
+
+        <button
+          className={styles.btn}
+          onClick={onNext}
+          disabled={!hasNextPage}
+          aria-label="Next page"
+        >
+          ›
+        </button>
+      </div>
     </nav>
   );
 }
