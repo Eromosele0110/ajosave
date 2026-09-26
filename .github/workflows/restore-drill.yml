@@ -1,0 +1,166 @@
+name: Backup Restore Drill
+
+# Periodically validates that the most recent S3 backup can actually be restored
+# and that the restored database passes a basic sanity-check query.
+#
+# Schedule: weekly on Sunday at 03:00 UTC (off-peak, after the daily 02:00 backup).
+# Also available via workflow_dispatch for ad-hoc drills.
+#
+# The drill runs against an ephemeral PostgreSQL container — production is
+# never touched.
+
+on:
+  schedule:
+    - cron: "0 3 * * 0"   # Sunday 03:00 UTC
+  workflow_dispatch:
+    inputs:
+      s3_key:
+        description: "Override S3 key (e.g. backups/postgres/2024-01-15T02-00-00Z.sql.gz). Leave blank to use the latest backup."
+        required: false
+        default: ""
+
+jobs:
+  restore-drill:
+    name: Restore & Verify
+    runs-on: ubuntu-latest
+    environment: production   # uses same secrets as the backup job
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: drilluser
+          POSTGRES_PASSWORD: drillpassword
+          POSTGRES_DB: drilldb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_BACKUP_REGION }}
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get install -y postgresql-client
+
+      # ── Discover the backup to restore ────────────────────────────────────────
+      - name: Resolve S3 key
+        id: resolve_key
+        env:
+          S3_BACKUP_BUCKET: ${{ secrets.S3_BACKUP_BUCKET }}
+          INPUT_KEY: ${{ inputs.s3_key }}
+        run: |
+          if [ -n "$INPUT_KEY" ]; then
+            echo "s3_key=$INPUT_KEY" >> "$GITHUB_OUTPUT"
+            echo "Using manually specified key: $INPUT_KEY"
+          else
+            # Find the most recent backup object
+            LATEST=$(aws s3 ls "s3://${S3_BACKUP_BUCKET}/backups/postgres/" \
+              | sort | tail -1 | awk '{print $4}')
+            if [ -z "$LATEST" ]; then
+              echo "::error::No backup files found in s3://${S3_BACKUP_BUCKET}/backups/postgres/"
+              exit 1
+            fi
+            KEY="backups/postgres/${LATEST}"
+            echo "s3_key=$KEY" >> "$GITHUB_OUTPUT"
+            echo "Latest backup: $KEY"
+          fi
+
+      # ── Download and restore into the ephemeral DB ────────────────────────────
+      - name: Download backup from S3
+        env:
+          S3_BACKUP_BUCKET: ${{ secrets.S3_BACKUP_BUCKET }}
+          S3_KEY: ${{ steps.resolve_key.outputs.s3_key }}
+        run: |
+          aws s3 cp "s3://${S3_BACKUP_BUCKET}/${S3_KEY}" /tmp/drill_backup.sql.gz
+          echo "Downloaded $(du -sh /tmp/drill_backup.sql.gz | cut -f1) backup"
+
+      - name: Restore backup to ephemeral database
+        env:
+          PGPASSWORD: drillpassword
+        run: |
+          echo "Restoring backup to ephemeral PostgreSQL instance…"
+          gunzip -c /tmp/drill_backup.sql.gz | psql \
+            -h localhost -p 5432 \
+            -U drilluser -d drilldb \
+            --no-password \
+            2>&1 | tail -20
+
+      # ── Sanity-check the restored data ────────────────────────────────────────
+      - name: Verify restored database
+        id: verify
+        env:
+          PGPASSWORD: drillpassword
+        run: |
+          echo "=== Running sanity-check queries on restored DB ==="
+
+          # 1. Core tables must exist
+          TABLES=$(psql -h localhost -p 5432 -U drilluser -d drilldb --no-password -At \
+            -c "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'")
+          echo "Tables in public schema: $TABLES"
+          if [ "$TABLES" -lt 5 ]; then
+            echo "::error::Restored DB has fewer than 5 tables — restore may have failed"
+            exit 1
+          fi
+
+          # 2. Essential tables must be present
+          for TABLE in users circles members contributions payouts; do
+            EXISTS=$(psql -h localhost -p 5432 -U drilluser -d drilldb --no-password -At \
+              -c "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='${TABLE}'")
+            if [ "$EXISTS" -ne 1 ]; then
+              echo "::error::Table '${TABLE}' is missing from restored database"
+              exit 1
+            fi
+            echo "  ✓ Table '$TABLE' present"
+          done
+
+          # 3. Row counts (non-empty tables indicate data was actually restored)
+          USER_COUNT=$(psql -h localhost -p 5432 -U drilluser -d drilldb --no-password -At \
+            -c "SELECT count(*) FROM users")
+          CIRCLE_COUNT=$(psql -h localhost -p 5432 -U drilluser -d drilldb --no-password -At \
+            -c "SELECT count(*) FROM circles")
+          echo "  users: $USER_COUNT rows"
+          echo "  circles: $CIRCLE_COUNT rows"
+
+          # 4. Write a summary for the job
+          {
+            echo "table_count=$TABLES"
+            echo "user_count=$USER_COUNT"
+            echo "circle_count=$CIRCLE_COUNT"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "All sanity checks passed ✓"
+
+      # ── Reporting ─────────────────────────────────────────────────────────────
+      - name: Write job summary
+        if: always()
+        run: |
+          echo "### Backup Restore Drill Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| S3 key | \`${{ steps.resolve_key.outputs.s3_key }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tables restored | ${{ steps.verify.outputs.table_count }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Users | ${{ steps.verify.outputs.user_count }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Circles | ${{ steps.verify.outputs.circle_count }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Result | ${{ job.status == 'success' && '✅ PASSED' || '❌ FAILED' }} |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "::error::Backup restore drill FAILED — the latest backup at '${{ steps.resolve_key.outputs.s3_key }}' did not restore cleanly. Investigate immediately."
+
+      - name: Cleanup
+        if: always()
+        run: rm -f /tmp/drill_backup.sql.gz
