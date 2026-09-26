@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { signOut } from "next-auth/react";
 import { Button } from "@/components/ui/Button";
-import { ConfirmModal } from "@/components/ui/ConfirmModal";
+import { DestructiveConfirmModal } from "@/components/ui/DestructiveConfirmModal";
 
 export function DeleteAccountButton() {
   const [open, setOpen] = useState(false);
@@ -30,11 +30,30 @@ export function DeleteAccountButton() {
       <Button variant="ghost" size="sm" onClick={() => setOpen(true)}>
         Delete Account
       </Button>
-      {error && <p style={{ fontSize: "var(--text-xs)", color: "var(--color-error)", marginTop: "var(--space-2)" }}>{error}</p>}
-      <ConfirmModal
+      {error && (
+        <p
+          style={{
+            fontSize: "var(--text-xs)",
+            color: "var(--color-error)",
+            marginTop: "var(--space-2)",
+          }}
+        >
+          {error}
+        </p>
+      )}
+      <DestructiveConfirmModal
         open={open}
+        type="danger"
         title="Delete Account"
-        message="This will permanently delete your account and all associated data. This action cannot be undone."
+        message="This will permanently delete your account and all associated data."
+        consequences={[
+          "Your profile and personal information will be erased.",
+          "You will be removed from all circles you have joined.",
+          "Your contribution history will be permanently lost.",
+          "This action cannot be undone — you will need to create a new account.",
+        ]}
+        confirmPhrase="DELETE"
+        delay={3}
         confirmLabel="Yes, Delete My Account"
         loading={loading}
         onConfirm={handleDelete}
