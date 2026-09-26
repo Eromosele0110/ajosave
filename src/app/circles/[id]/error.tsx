@@ -1,8 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { Button } from "@/components/ui/Button";
-import styles from "../../error.module.css";
+import { ErrorState } from "@/components/ui/ErrorState";
 
 export default function CircleDetailError({
   error,
@@ -12,18 +11,15 @@ export default function CircleDetailError({
   reset: () => void;
 }) {
   useEffect(() => {
-    console.error(error);
+    console.error("[CircleDetailError]", error);
   }, [error]);
 
   return (
-    <div className={styles.container}>
-      <div className={styles.inner}>
-        <h2 className={styles.title}>Failed to load circle</h2>
-        <p className={styles.message}>
-          We couldn&apos;t load this circle. Please try again.
-        </p>
-        <Button onClick={reset}>Try again</Button>
-      </div>
-    </div>
+    <ErrorState
+      title="Failed to load circle"
+      message="We couldn't load this savings circle. It may have been removed or you may not have access."
+      onRetry={reset}
+      showHomeLink
+    />
   );
 }
