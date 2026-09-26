@@ -120,4 +120,4 @@ export const POST = withErrorHandler(async (req: NextRequest, ctx: unknown) => {
     success: true,
     data: { authorizationUrl, reference, isPartial, remainingUsdc: circle.contributionUsdc },
   });
-})));
+});
