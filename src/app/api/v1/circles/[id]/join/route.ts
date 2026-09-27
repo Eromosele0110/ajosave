@@ -8,6 +8,7 @@ import { verifyInviteToken } from "@/lib/tokens";
 import { checkReputationGate } from "@/server/services/reputation.service";
 import { isKycVerified } from "@/lib/kyc";
 import { serverConfig } from "@/server/config";
+import { withAdvisoryLock } from "@/lib/concurrency";
 import type { ApiResponse, Member } from "@/types";
 
 export const POST = withRateLimit(withErrorHandler(async (req: NextRequest, ctx: unknown) => {
@@ -100,6 +101,8 @@ export const POST = withRateLimit(withErrorHandler(async (req: NextRequest, ctx:
     }
   }
 
-  const member = await joinCircle(params.id, userId, isInvited);
+  const member = await withAdvisoryLock("circle:join", params.id, () =>
+    joinCircle(params.id, userId, isInvited)
+  );
   return NextResponse.json<ApiResponse<Member>>({ success: true, data: member }, { status: 201 });
 }));
