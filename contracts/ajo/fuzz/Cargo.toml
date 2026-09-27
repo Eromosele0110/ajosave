@@ -1,0 +1,32 @@
+[package]
+name = "ajo-fuzz"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "fuzz_contribute"
+path = "fuzz_targets/fuzz_contribute.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_join"
+path = "fuzz_targets/fuzz_join.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_payout"
+path = "fuzz_targets/fuzz_payout.rs"
+test = false
+doc = false
+
+[dependencies]
+libfuzzer-sys = "0.4"
+ajo = { path = ".." }
+
+[profile.release]
+# Optimise for coverage feedback; keep frame pointers for good stack traces.
+opt-level = 3
+debug = true
