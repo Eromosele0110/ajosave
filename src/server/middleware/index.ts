@@ -1,6 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
 import * as Sentry from "@sentry/nextjs";
 import type { ApiError } from "@/types";
 import { getRedis } from "@/lib/redis";
@@ -9,40 +7,23 @@ import logger from "@/lib/logger";
 import { runWithCorrelationId } from "@/lib/correlation";
 import { sanitizeBody } from "@/lib/sanitize";
 import { isAppError, internalError } from "@/lib/errors";
+import { withAuthorization } from "./authorization";
+
+export { withAuthorization, resolveUser } from "./authorization";
+export type { AuthorizedUser, AuthorizationContext, AuthorizationOptions } from "./authorization";
+export { withValidation, MAX_JSON_BODY_BYTES } from "./validation";
+export type { FieldError, ValidatedInput, ValidationSchemas } from "./validation";
 
 type Handler = (_req: NextRequest, _ctx?: any) => Promise<NextResponse>;
 
+/** Any authenticated user. Delegates to `withAuthorization` for consistent 401/403 handling. */
 export function withAuth(handler: Handler): Handler {
-  return async (req, ctx) => {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json<ApiError>(
-        { success: false, error: "Unauthorized", code: "UNAUTHORIZED" },
-        { status: 401 }
-      );
-    }
-    return handler(req, ctx);
-  };
+  return withAuthorization(handler);
 }
 
+/** Admin-only routes. Delegates to `withAuthorization` for consistent 401/403 handling. */
 export function withAdminAuth(handler: Handler): Handler {
-  return async (req, ctx) => {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json<ApiError>(
-        { success: false, error: "Unauthorized", code: "UNAUTHORIZED" },
-        { status: 401 }
-      );
-    }
-    const role = (session.user as { role?: string }).role;
-    if (role !== "admin") {
-      return NextResponse.json<ApiError>(
-        { success: false, error: "Forbidden", code: "FORBIDDEN" },
-        { status: 403 }
-      );
-    }
-    return handler(req, ctx);
-  };
+  return withAuthorization(handler, { roles: ["admin"] });
 }
 
 export function withErrorHandler(handler: Handler): Handler {
