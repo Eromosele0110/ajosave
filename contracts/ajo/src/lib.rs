@@ -32,6 +32,13 @@ const INSTANCE_LIFETIME_THRESHOLD: u32 = DAY_IN_LEDGERS;
 const PERSISTENT_BUMP_AMOUNT: u32 = 30 * DAY_IN_LEDGERS;
 const PERSISTENT_LIFETIME_THRESHOLD: u32 = 7 * DAY_IN_LEDGERS;
 
+// ─── Interval bounds (issue #48) ──────────────────────────────────────────────
+/// Minimum seconds between payouts.
+pub const MIN_CYCLE_INTERVAL_SECS: u64 = 1;
+/// Maximum seconds between payouts (365 days). Bounds `timestamp + interval`
+/// far below `u64::MAX` so payout scheduling can never overflow.
+pub const MAX_CYCLE_INTERVAL_SECS: u64 = 365 * 24 * 60 * 60;
+
 // ─── Storage keys ─────────────────────────────────────────────────────────────
 
 /// Storage key classification for optimization:
@@ -106,6 +113,27 @@ impl AjoContract {
         if contribution_amount <= 0 {
             panic!("contribution_amount must be positive");
         }
+        if cycle_interval_secs < MIN_CYCLE_INTERVAL_SECS
+            || cycle_interval_secs > MAX_CYCLE_INTERVAL_SECS
+        {
+            panic!("cycle_interval_secs out of range");
+        }
+        // The full pot must be representable.
+        if contribution_amount.checked_mul(max_members as i128).is_none() {
+            panic!("contribution_amount too large");
+        }
+
+        // ─── Address validation (issue #47) ───────────────────────────────────
+        let this = env.current_contract_address();
+        if admin == token {
+            panic!("admin and token must differ");
+        }
+        if admin == this {
+            panic!("admin cannot be the contract itself");
+        }
+        if token == this {
+            panic!("token cannot be the contract itself");
+        }
 
         admin.require_auth();
 
@@ -161,7 +189,7 @@ impl AjoContract {
 
         if members.len() == max_members {
             let interval: u64 = env.storage().instance().get(&DataKey::CycleIntervalSecs).expect("not initialized");
-            let next_payout = env.ledger().timestamp() + interval;
+            let next_payout = Self::schedule_after(&env, interval);
             env.storage().instance().set(&DataKey::CurrentCycle, &1u32);
             env.storage().instance().set(&DataKey::NextPayoutTime, &next_payout);
             env.events().publish((Symbol::new(&env, "circle_started"),), (max_members, amount));
@@ -263,6 +291,21 @@ impl AjoContract {
             panic!("payout order length must equal max_members");
         }
 
+        // ─── Permutation validation (issue #49) ───────────────────────────────
+        // Every index in 0..max_members must appear exactly once so each member
+        // is paid exactly once and no payout references a missing member.
+        let mut seen: u32 = 0; // bitmask; max_members <= 20
+        for idx in order.iter() {
+            if idx >= max_members {
+                panic!("payout order index out of range");
+            }
+            let bit = 1u32 << idx;
+            if seen & bit != 0 {
+                panic!("payout order contains duplicate index");
+            }
+            seen |= bit;
+        }
+
         env.storage().instance().set(&DataKey::PayoutOrder, &order);
     }
 
@@ -340,7 +383,9 @@ impl AjoContract {
 
         let token: Address = env.storage().instance().get(&DataKey::Token).expect("not initialized");
         let contribution: i128 = env.storage().instance().get(&DataKey::ContributionAmount).expect("not initialized");
-        let pot = contribution * (max_members as i128);
+        let pot = contribution
+            .checked_mul(max_members as i128)
+            .expect("pot overflow");
 
         // ─── Effects before external call ─────────────────────────────────────
         if current_cycle >= max_members {
@@ -361,7 +406,7 @@ impl AjoContract {
         } else {
             let interval: u64 = env.storage().instance().get(&DataKey::CycleIntervalSecs).expect("not initialized");
             env.storage().instance().set(&DataKey::CurrentCycle, &(current_cycle + 1));
-            env.storage().instance().set(&DataKey::NextPayoutTime, &(env.ledger().timestamp() + interval));
+            env.storage().instance().set(&DataKey::NextPayoutTime, &Self::schedule_after(&env, interval));
         }
 
         // ─── Interaction ──────────────────────────────────────────────────────
@@ -537,7 +582,7 @@ impl AjoContract {
 
     // ── Read-only ─────────────────────────────────────────────────────────────
 
-    pub fn get_state(env: Env) -> (u32, u32, u64, bool) {
+    pub fn get_state(env: Env) -> (u32, u32, u64, bool, bool) {
         let current_cycle: u32 = env.storage().instance().get(&DataKey::CurrentCycle).unwrap_or(0);
         let max_members: u32 = env.storage().instance().get(&DataKey::MaxMembers).unwrap_or(0);
         let next_payout_time: u64 = env.storage().instance().get(&DataKey::NextPayoutTime).unwrap_or(0);
@@ -609,6 +654,14 @@ impl AjoContract {
 
     /// Set contribution status in temporary storage (expires when circle completes)
     /// This reduces ledger footprint compared to instance storage.
+    /// Overflow-safe `now + interval` (issue #48).
+    fn schedule_after(env: &Env, interval: u64) -> u64 {
+        env.ledger()
+            .timestamp()
+            .checked_add(interval)
+            .expect("next payout time overflow")
+    }
+
     fn set_temp_contribution(env: &Env, member: &Address, cycle: u32, contributed: bool) {
         env.storage().temporary().set(&DataKey::Contributions(member.clone(), cycle), &contributed);
     }
@@ -903,3 +956,6 @@ mod integration_tests;
 
 #[cfg(test)]
 mod fuzz_tests;
+
+#[cfg(test)]
+mod lifecycle_tests;

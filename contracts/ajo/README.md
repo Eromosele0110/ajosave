@@ -77,6 +77,16 @@ State transitions are enforced by the contract — there is no admin escape hatc
 
 Sets up the circle. Stores all parameters and emits an `initialized` event.
 
+Validation:
+- `admin` and `token` must differ, and neither may be the contract's own address.
+- `cycle_interval_secs` must be within `1..=31_536_000` (365 days) so payout scheduling cannot overflow.
+- `contribution_amount * max_members` must fit in `i128`.
+
+### `set_payout_order(env, order)`
+
+Admin-only, before the circle starts. `order` must be a permutation of `0..max_members`
+(correct length, every index in range, no duplicates).
+
 ### `join(env, member)`
 
 - Requires `member` auth.
