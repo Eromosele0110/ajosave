@@ -317,3 +317,23 @@ Set in your environment:
 ```bash
 STELLAR_AJO_CONTRACT_ID=CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC
 ```
+
+## Missed Contribution Policy
+
+At each `payout`, members who did not contribute for the cycle get a
+`contribution_missed` event and their lifetime `MissedContributions` counter
+increments (it also counts against on-time reputation). Once a member reaches
+the admin-configured threshold (`set_missed_policy`, default `1`, range
+`1..=max_members`) they are suspended (`member_suspended` event) and
+`contribute` rejects them until the admin calls `reinstate_member`.
+
+Read-only: `get_missed_policy`, `get_missed_contributions`, `is_suspended`.
+
+## Temporary Storage TTL
+
+Per-cycle contribution flags live in temporary storage. Each write extends the
+entry's TTL to cover the cycle interval plus a one-day buffer (minimum 7 days,
+capped at the network max TTL), so an entry cannot expire before `payout` reads
+it. Entries are removed when the circle completes. `set_ttl_config` now
+validates `1 <= threshold <= extend_to`, `extend_to >= 1 day` and
+`extend_to <= max_ttl`, and emits `ttl_config_updated`.

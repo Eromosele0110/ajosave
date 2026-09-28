@@ -31,6 +31,13 @@ const INSTANCE_BUMP_AMOUNT: u32 = 7 * DAY_IN_LEDGERS;
 const INSTANCE_LIFETIME_THRESHOLD: u32 = DAY_IN_LEDGERS;
 const PERSISTENT_BUMP_AMOUNT: u32 = 30 * DAY_IN_LEDGERS;
 const PERSISTENT_LIFETIME_THRESHOLD: u32 = 7 * DAY_IN_LEDGERS;
+const TEMP_LIFETIME_THRESHOLD: u32 = DAY_IN_LEDGERS;
+/// Minimum TTL for instance storage accepted by `set_ttl_config`.
+const MIN_TTL_EXTEND_TO: u32 = DAY_IN_LEDGERS;
+
+// ─── Missed contribution policy ───────────────────────────────────────────────
+/// Default number of missed cycles tolerated before a member is suspended.
+const DEFAULT_MAX_MISSED: u32 = 1;
 
 // ─── Storage keys ─────────────────────────────────────────────────────────────
 
@@ -70,6 +77,11 @@ pub enum DataKey {
 
     // ─── Reentrancy guard (issue #264) - instance storage ────────────────────────
     PayoutLock,
+
+    // ─── Missed contribution policy (issue #50) ──────────────────────────────────
+    MaxMissedContributions,          // instance: allowed misses before suspension
+    MissedContributions(Address),    // persistent: lifetime missed count per member
+    Suspended(Address),              // instance: member suspended from this circle
 }
 
 // ─── Contract ─────────────────────────────────────────────────────────────────
@@ -201,6 +213,9 @@ impl AjoContract {
         if !members.contains(&member) {
             panic!("not a member");
         }
+        if Self::is_suspended(env.clone(), member.clone()) {
+            panic!("member is suspended");
+        }
 
         // Check contribution using temporary storage
         let already_paid: bool = Self::get_temp_contribution(&env, &member, current_cycle);
@@ -313,7 +328,8 @@ impl AjoContract {
             // Check contribution using temporary storage
             let paid: bool = Self::get_temp_contribution(&env, &m, current_cycle);
             if !paid {
-                env.events().publish((Symbol::new(&env, "member_defaulted"),), (m, current_cycle));
+                env.events().publish((Symbol::new(&env, "member_defaulted"),), (m.clone(), current_cycle));
+                Self::record_missed_contribution(&env, &m, current_cycle);
             }
         }
 
@@ -537,7 +553,7 @@ impl AjoContract {
 
     // ── Read-only ─────────────────────────────────────────────────────────────
 
-    pub fn get_state(env: Env) -> (u32, u32, u64, bool) {
+    pub fn get_state(env: Env) -> (u32, u32, u64, bool, bool) {
         let current_cycle: u32 = env.storage().instance().get(&DataKey::CurrentCycle).unwrap_or(0);
         let max_members: u32 = env.storage().instance().get(&DataKey::MaxMembers).unwrap_or(0);
         let next_payout_time: u64 = env.storage().instance().get(&DataKey::NextPayoutTime).unwrap_or(0);
@@ -603,14 +619,105 @@ impl AjoContract {
         let admin: Address = env.storage().instance().get(&DataKey::Admin).expect("not initialized");
         admin.require_auth();
 
+        if extend_to < MIN_TTL_EXTEND_TO {
+            panic!("extend_to below minimum ttl");
+        }
+        if threshold == 0 || threshold > extend_to {
+            panic!("threshold must be in 1..=extend_to");
+        }
+        let max_ttl = env.storage().max_ttl();
+        if extend_to > max_ttl {
+            panic!("extend_to exceeds max ttl");
+        }
+
         env.storage().instance().set(&DataKey::TtlThreshold, &threshold);
         env.storage().instance().set(&DataKey::TtlExtendTo, &extend_to);
+        env.events().publish(
+            (Symbol::new(&env, "ttl_config_updated"),),
+            (admin, threshold, extend_to),
+        );
+    }
+
+    // ── Missed contribution policy (issue #50) ────────────────────────────────
+
+    /// Set how many missed cycles a member may accumulate in this circle
+    /// before being suspended. Admin-only. Must be between 1 and max_members.
+    pub fn set_missed_policy(env: Env, max_missed: u32) {
+        Self::extend_instance_ttl(&env);
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).expect("not initialized");
+        admin.require_auth();
+
+        let max_members: u32 = env.storage().instance().get(&DataKey::MaxMembers).expect("not initialized");
+        if max_missed == 0 || max_missed > max_members {
+            panic!("max_missed must be between 1 and max_members");
+        }
+        env.storage().instance().set(&DataKey::MaxMissedContributions, &max_missed);
+        env.events().publish((Symbol::new(&env, "missed_policy_updated"),), (admin, max_missed));
+    }
+
+    /// Current missed-contribution threshold.
+    pub fn get_missed_policy(env: Env) -> u32 {
+        env.storage().instance().get(&DataKey::MaxMissedContributions).unwrap_or(DEFAULT_MAX_MISSED)
+    }
+
+    /// Lifetime missed contributions for a member.
+    pub fn get_missed_contributions(env: Env, member: Address) -> u32 {
+        env.storage().persistent().get(&DataKey::MissedContributions(member)).unwrap_or(0)
+    }
+
+    /// Whether a member is suspended from contributing in this circle.
+    pub fn is_suspended(env: Env, member: Address) -> bool {
+        env.storage().instance().get(&DataKey::Suspended(member)).unwrap_or(false)
+    }
+
+    /// Lift a suspension. Admin-only.
+    pub fn reinstate_member(env: Env, member: Address) {
+        Self::extend_instance_ttl(&env);
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).expect("not initialized");
+        admin.require_auth();
+
+        let members: Vec<Address> = env.storage().instance().get(&DataKey::Members).expect("not initialized");
+        if !members.contains(&member) {
+            panic!("not a member");
+        }
+        env.storage().instance().remove(&DataKey::Suspended(member.clone()));
+        env.events().publish((Symbol::new(&env, "member_reinstated"),), (member,));
+    }
+
+    fn record_missed_contribution(env: &Env, member: &Address, cycle: u32) {
+        let key = DataKey::MissedContributions(member.clone());
+        let missed: u32 = env.storage().persistent().get(&key).unwrap_or(0).saturating_add(1);
+        env.storage().persistent().set(&key, &missed);
+        Self::extend_persistent_ttl(env, &key);
+
+        // Missing a cycle counts against on-time reputation.
+        let total_key = DataKey::TotalContributions(member.clone());
+        let total: u32 = env.storage().persistent().get(&total_key).unwrap_or(0);
+        env.storage().persistent().set(&total_key, &total.saturating_add(1));
+        Self::update_reputation(env, member);
+
+        env.events().publish(
+            (Symbol::new(env, "contribution_missed"),),
+            (member.clone(), cycle, missed),
+        );
+
+        let max_missed: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MaxMissedContributions)
+            .unwrap_or(DEFAULT_MAX_MISSED);
+        let already: bool = env.storage().instance().get(&DataKey::Suspended(member.clone())).unwrap_or(false);
+        if missed >= max_missed && !already {
+            env.storage().instance().set(&DataKey::Suspended(member.clone()), &true);
+            env.events().publish((Symbol::new(env, "member_suspended"),), (member.clone(), missed));
+        }
     }
 
     /// Set contribution status in temporary storage (expires when circle completes)
     /// This reduces ledger footprint compared to instance storage.
     fn set_temp_contribution(env: &Env, member: &Address, cycle: u32, contributed: bool) {
         env.storage().temporary().set(&DataKey::Contributions(member.clone(), cycle), &contributed);
+        Self::extend_temp_storage_ttl(env, member, cycle);
     }
 
     /// Get contribution status from temporary storage
@@ -636,11 +743,23 @@ impl AjoContract {
             .extend_ttl(threshold, extend_to);
     }
 
-    /// Extend TTL for temporary storage entries when needed
-    /// Temporary storage uses lower TTL defaults for automatic cleanup
+    /// Extend TTL for a temporary contribution entry (issue #51).
+    ///
+    /// The entry must outlive the cycle it belongs to, otherwise it could
+    /// expire before `payout` checks it and a paying member would be treated
+    /// as defaulted. The TTL covers the cycle interval (converted to ledgers,
+    /// ~5s each) plus a one-day buffer, capped at the network max TTL.
     fn extend_temp_storage_ttl(env: &Env, member: &Address, cycle: u32) {
         let temp_entry = DataKey::Contributions(member.clone(), cycle);
-        env.storage().temporary().extend_ttl(&temp_entry, DAY_IN_LEDGERS, 7 * DAY_IN_LEDGERS);
+        let interval: u64 = env.storage().instance().get(&DataKey::CycleIntervalSecs).unwrap_or(0);
+        let extend_to = Self::temp_ttl_for_interval(env, interval);
+        env.storage().temporary().extend_ttl(&temp_entry, TEMP_LIFETIME_THRESHOLD.min(extend_to), extend_to);
+    }
+
+    fn temp_ttl_for_interval(env: &Env, interval_secs: u64) -> u32 {
+        let ledgers = (interval_secs / 5).saturating_add(DAY_IN_LEDGERS as u64);
+        let wanted = if ledgers > u32::MAX as u64 { u32::MAX } else { ledgers as u32 };
+        wanted.max(7 * DAY_IN_LEDGERS).min(env.storage().max_ttl())
     }
 
     fn extend_persistent_ttl(env: &Env, key: &DataKey) {
@@ -903,3 +1022,6 @@ mod integration_tests;
 
 #[cfg(test)]
 mod fuzz_tests;
+
+#[cfg(test)]
+mod policy_tests;
