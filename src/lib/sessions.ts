@@ -5,6 +5,37 @@
 import { query } from "./db";
 import { createHash } from "crypto";
 import type { NextRequest } from "next/server";
+import { getRedis } from "./redis";
+
+const REVOKED_PREFIX = "session:revoked:";
+const REVOKED_TTL_SECONDS = 30 * 24 * 60 * 60; // outlives the longest session JWT
+
+/**
+ * Add revoked token hashes to a Redis denylist so already-issued JWTs are rejected
+ * immediately (#37). Failures are logged, not thrown: the DB row is already gone.
+ */
+export async function denylistTokenHashes(tokenHashes: string[]): Promise<void> {
+  if (tokenHashes.length === 0) return;
+  try {
+    const redis = await getRedis();
+    await Promise.all(
+      tokenHashes.map((h) => redis.set(`${REVOKED_PREFIX}${h}`, "1", { EX: REVOKED_TTL_SECONDS }))
+    );
+  } catch (err) {
+    console.error("[sessions] Failed to denylist revoked sessions:", err);
+  }
+}
+
+/** True when the session token hash has been revoked or no longer exists. */
+export async function isSessionRevoked(tokenHash: string): Promise<boolean> {
+  try {
+    const redis = await getRedis();
+    if (await redis.get(`${REVOKED_PREFIX}${tokenHash}`)) return true;
+  } catch {
+    // Redis unavailable: fall back to the database as source of truth
+  }
+  return (await getSessionByTokenHash(tokenHash)) === null;
+}
 
 export interface Session {
   id: string;
@@ -187,12 +218,13 @@ export async function getSessionByTokenHash(tokenHash: string): Promise<Session 
  * Revoke a specific session
  */
 export async function revokeSession(sessionId: string, userId: string): Promise<boolean> {
-  const { rowCount } = await query(
-    "DELETE FROM sessions WHERE id = $1 AND user_id = $2",
+  const { rows } = await query<{ token_hash: string }>(
+    "DELETE FROM sessions WHERE id = $1 AND user_id = $2 RETURNING token_hash",
     [sessionId, userId]
   );
+  await denylistTokenHashes(rows.map((r) => r.token_hash));
 
-  return (rowCount ?? 0) > 0;
+  return rows.length > 0;
 }
 
 /**
@@ -202,24 +234,26 @@ export async function revokeAllOtherSessions(
   userId: string,
   currentSessionId: string
 ): Promise<number> {
-  const { rowCount } = await query(
-    "DELETE FROM sessions WHERE user_id = $1 AND id != $2",
+  const { rows } = await query<{ token_hash: string }>(
+    "DELETE FROM sessions WHERE user_id = $1 AND id != $2 RETURNING token_hash",
     [userId, currentSessionId]
   );
+  await denylistTokenHashes(rows.map((r) => r.token_hash));
 
-  return rowCount ?? 0;
+  return rows.length;
 }
 
 /**
  * Revoke all sessions for a user
  */
 export async function revokeAllSessions(userId: string): Promise<number> {
-  const { rowCount } = await query(
-    "DELETE FROM sessions WHERE user_id = $1",
+  const { rows } = await query<{ token_hash: string }>(
+    "DELETE FROM sessions WHERE user_id = $1 RETURNING token_hash",
     [userId]
   );
+  await denylistTokenHashes(rows.map((r) => r.token_hash));
 
-  return rowCount ?? 0;
+  return rows.length;
 }
 
 /**

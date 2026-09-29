@@ -37,6 +37,51 @@ export async function postMessage(
   return rows[0];
 }
 
+/**
+ * Deletes a circle chat message — the moderation boundary for #41.
+ *
+ * Authorization boundary: only the message author or the circle's creator
+ * (circle admin) may delete a message. Anyone else is rejected, including
+ * other active members of the circle.
+ *
+ * Throws:
+ *   - "Message not found" if the message (or circle) does not exist
+ *   - "Forbidden" if the requesting user is neither the author nor the creator
+ */
+export async function deleteMessage(
+  circleId: string,
+  messageId: string,
+  requestingUserId: string
+): Promise<void> {
+  const { rows: messageRows } = await query<{ id: string; user_id: string }>(
+    `SELECT id, user_id FROM circle_messages WHERE id = $1 AND circle_id = $2`,
+    [messageId, circleId]
+  );
+  if (messageRows.length === 0) {
+    throw new Error("Message not found");
+  }
+  const message = messageRows[0];
+
+  const { rows: circleRows } = await query<{ creator_id: string }>(
+    `SELECT creator_id FROM circles WHERE id = $1`,
+    [circleId]
+  );
+  if (circleRows.length === 0) {
+    throw new Error("Message not found");
+  }
+  const isAuthor = message.user_id === requestingUserId;
+  const isCircleAdmin = circleRows[0].creator_id === requestingUserId;
+
+  if (!isAuthor && !isCircleAdmin) {
+    throw new Error("Forbidden");
+  }
+
+  await query(`DELETE FROM circle_messages WHERE id = $1 AND circle_id = $2`, [
+    messageId,
+    circleId,
+  ]);
+}
+
 export async function getMessages(
   circleId: string,
   options?: GetMessagesOptions

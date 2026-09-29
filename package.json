@@ -22,6 +22,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "bundle:check": "node scripts/check-bundle-budget.js",
     "start": "next start",
     "lint": "eslint src --ext .ts,.tsx",
     "lint:fix": "eslint src --ext .ts,.tsx --fix",
@@ -34,6 +35,7 @@
     "contract:build": "cd contracts && stellar contract build",
     "contract:test": "cd contracts && cargo test",
     "contract:deploy": "ts-node scripts/deploy-contract.ts",
+    "contract:verify": "ts-node scripts/verify-contract.ts",
     "prepare": "husky"
   },
   "dependencies": {

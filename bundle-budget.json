@@ -1,0 +1,6 @@
+{
+  "$comment": "Gzipped JS budgets in KB. `perRoute` applies to every page's first-load JS; `routes` overrides it per route. `total` caps all emitted client JS.",
+  "perRoute": 250,
+  "total": 1500,
+  "routes": {}
+}

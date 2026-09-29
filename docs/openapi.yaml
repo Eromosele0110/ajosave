@@ -21,7 +21,14 @@ info:
     Server-to-server callers must include the `Cookie` header.
 
     The cron endpoint uses a separate `Authorization: Bearer <CRON_SECRET>` header.
-  version: "1.0.0"
+
+    ## Changelog
+    - **1.1.0** – Documented `/auth/verify-otp`, `/auth/refresh`, `/profile`,
+      `/sessions`, `/fx/rate`, `/kyc/verify`, and `/circles/{id}/leave`.
+      This is not the full route surface (see `src/app/api/v1/` for every
+      handler); coverage will keep expanding incrementally per endpoint.
+    - **1.0.0** – Initial versioned spec covering auth, circles, cron, health.
+  version: "1.1.0"
   contact:
     email: security@ajosave.app
   license:
@@ -39,6 +46,14 @@ tags:
     description: OTP-based phone authentication
   - name: circles
     description: Savings circle lifecycle
+  - name: profile
+    description: Authenticated user's profile
+  - name: sessions
+    description: Active session management
+  - name: fx
+    description: Fiat/USDC exchange rates
+  - name: kyc
+    description: Identity verification
   - name: cron
     description: Internal scheduler (server-to-server only)
   - name: health
@@ -275,6 +290,140 @@ paths:
                             example: "OTP sent successfully"
         "400":
           description: Invalid phone number
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /auth/verify-otp:
+    post:
+      tags: [auth]
+      summary: Verify a phone OTP
+      description: |
+        Exchanges a valid OTP for a session. Verification attempts are
+        rate-limited and locked out after repeated failures (see
+        `lockout` in the error response).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phone, otp]
+              properties:
+                phone:
+                  type: string
+                  example: "+2348012345678"
+                otp:
+                  type: string
+                  minLength: 6
+                  maxLength: 6
+                  example: "123456"
+      responses:
+        "200":
+          description: OTP verified
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiSuccess"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          message:
+                            type: string
+                            example: "OTP verified successfully"
+                          user:
+                            type: object
+                            properties:
+                              id:
+                                type: string
+                                format: uuid
+                              phone:
+                                type: string
+                              displayName:
+                                type: string
+                              role:
+                                type: string
+        "401":
+          description: Invalid, expired, or locked-out OTP
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiError"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          lockout:
+                            type: object
+                            properties:
+                              isLocked:
+                                type: boolean
+                              attempts:
+                                type: integer
+                              remainingAttempts:
+                                type: integer
+                              lockoutExpiresAt:
+                                type: integer
+                              lockoutRemainingSeconds:
+                                type: integer
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /auth/refresh:
+    post:
+      tags: [auth]
+      summary: Rotate a refresh token
+      description: Exchanges a valid refresh token for a new access token and refresh token pair.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken:
+                  type: string
+      responses:
+        "200":
+          description: New token pair issued
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiSuccess"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          accessToken:
+                            type: string
+                          refreshToken:
+                            type: string
+                          expiresIn:
+                            type: integer
+                            example: 900
+        "400":
+          description: Missing refresh token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "401":
+          description: Invalid or expired refresh token
           content:
             application/json:
               schema:
@@ -533,6 +682,249 @@ paths:
           $ref: "#/components/responses/NotFound"
         "500":
           $ref: "#/components/responses/InternalError"
+
+  /circles/{id}/leave:
+    post:
+      tags: [circles]
+      summary: Leave a circle
+      description: Removes the authenticated user from a circle they have joined but not yet been paid out on.
+      security:
+        - sessionCookie: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Left the circle successfully
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ── Profile ─────────────────────────────────────────────────────────────────
+  /profile:
+    get:
+      tags: [profile]
+      summary: Get the authenticated user's profile
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: Profile with reputation and contribution stats
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiSuccess"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: string
+                            format: uuid
+                          phone:
+                            type: string
+                          displayName:
+                            type: string
+                          email:
+                            type: string
+                            nullable: true
+                          stellarPublicKey:
+                            type: string
+                            nullable: true
+                          reputationScore:
+                            type: integer
+                          contributionStats:
+                            type: object
+                            properties:
+                              total:
+                                type: integer
+                              confirmed:
+                                type: integer
+                              missed:
+                                type: integer
+                          smsNotificationsEnabled:
+                            type: boolean
+                          emailNotificationsEnabled:
+                            type: boolean
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+    patch:
+      tags: [profile]
+      summary: Update the authenticated user's profile
+      security:
+        - sessionCookie: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                displayName:
+                  type: string
+                  minLength: 1
+                  maxLength: 80
+                email:
+                  type: string
+                  format: email
+                stellarPublicKey:
+                  type: string
+                  pattern: "^G[A-Z2-7]{55}$"
+                smsNotificationsEnabled:
+                  type: boolean
+                emailNotificationsEnabled:
+                  type: boolean
+      responses:
+        "200":
+          description: Profile updated
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ── Sessions ────────────────────────────────────────────────────────────────
+  /sessions:
+    get:
+      tags: [sessions]
+      summary: List active sessions
+      description: Returns all active sessions for the authenticated user, flagging the current one.
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: List of sessions
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiSuccess"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          sessions:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                id:
+                                  type: string
+                                isCurrent:
+                                  type: boolean
+                                createdAt:
+                                  type: string
+                                  format: date-time
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /sessions/revoke-all:
+    post:
+      tags: [sessions]
+      summary: Revoke all sessions except the current one
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: Other sessions revoked
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /sessions/{sessionId}:
+    delete:
+      tags: [sessions]
+      summary: Revoke a specific session
+      security:
+        - sessionCookie: []
+      parameters:
+        - in: path
+          name: sessionId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Session revoked
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ── FX ──────────────────────────────────────────────────────────────────────
+  /fx/rate:
+    get:
+      tags: [fx]
+      summary: Get the current fiat-per-USDC rate
+      parameters:
+        - in: query
+          name: currency
+          schema:
+            type: string
+            default: NGN
+            enum: [NGN, GBP, USD, EUR]
+      responses:
+        "200":
+          description: Current exchange rate
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiSuccess"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          rate:
+                            type: number
+                          currency:
+                            type: string
+                          fetchedAt:
+                            type: string
+                            format: date-time
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ── KYC ─────────────────────────────────────────────────────────────────────
+  /kyc/verify:
+    post:
+      tags: [kyc]
+      summary: Initiate a KYC verification session
+      description: Starts a Smile Identity KYC session and returns a web-token the client passes to the widget SDK.
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: KYC session token issued
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiSuccess"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          token:
+                            type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 
   # ── Cron ────────────────────────────────────────────────────────────────────
   /cron/cycle:

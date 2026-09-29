@@ -47,7 +47,7 @@ export async function initiateKyc(userId: string): Promise<{ token: string }> {
 
   // Mark user as pending
   await query(
-    "UPDATE users SET kyc_status = 'pending' WHERE id = $1",
+    "UPDATE users SET kyc_status = 'pending', kyc_submitted_at = NOW() WHERE id = $1 AND kyc_status <> 'approved'",
     [userId]
   );
 

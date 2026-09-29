@@ -31,6 +31,20 @@ const INSTANCE_BUMP_AMOUNT: u32 = 7 * DAY_IN_LEDGERS;
 const INSTANCE_LIFETIME_THRESHOLD: u32 = DAY_IN_LEDGERS;
 const PERSISTENT_BUMP_AMOUNT: u32 = 30 * DAY_IN_LEDGERS;
 const PERSISTENT_LIFETIME_THRESHOLD: u32 = 7 * DAY_IN_LEDGERS;
+const TEMP_LIFETIME_THRESHOLD: u32 = DAY_IN_LEDGERS;
+/// Minimum TTL for instance storage accepted by `set_ttl_config`.
+const MIN_TTL_EXTEND_TO: u32 = DAY_IN_LEDGERS;
+
+// ─── Missed contribution policy ───────────────────────────────────────────────
+/// Default number of missed cycles tolerated before a member is suspended.
+const DEFAULT_MAX_MISSED: u32 = 1;
+
+// ─── Upgrade governance ───────────────────────────────────────────────────────
+/// Minimum delay (seconds) between `propose_upgrade` and a matching `upgrade`
+/// call taking effect. Gives circle members visibility/time to react (e.g.
+/// exit) before new contract logic goes live, instead of an admin being able
+/// to swap the WASM instantly and unilaterally.
+const UPGRADE_TIMELOCK_SECS: u64 = 172_800; // 48 hours
 
 // ─── Interval bounds (issue #48) ──────────────────────────────────────────────
 /// Minimum seconds between payouts.
@@ -52,6 +66,8 @@ pub enum DataKey {
     // ─── Instance storage (core circle configuration) ────────────────────────────
     Admin,
     PendingAdmin,
+    PendingUpgradeHash,
+    PendingUpgradeTime,
     Token,
     ContributionAmount,
     MaxMembers,
@@ -77,6 +93,11 @@ pub enum DataKey {
 
     // ─── Reentrancy guard (issue #264) - instance storage ────────────────────────
     PayoutLock,
+
+    // ─── Missed contribution policy (issue #50) ──────────────────────────────────
+    MaxMissedContributions,          // instance: allowed misses before suspension
+    MissedContributions(Address),    // persistent: lifetime missed count per member
+    Suspended(Address),              // instance: member suspended from this circle
 }
 
 // ─── Contract ─────────────────────────────────────────────────────────────────
@@ -136,6 +157,15 @@ impl AjoContract {
         }
 
         admin.require_auth();
+
+        // ─── Token issuer safeguard ────────────────────────────────────────────
+        // `token` is admin-supplied and, once set here, can never be changed for
+        // the lifetime of this circle (there is no `set_token`/update path).
+        // Probe it with a standard SEP-41 read before persisting any state, so a
+        // bad or non-token address fails atomically in this same call instead of
+        // silently bricking the circle the first time `join`/`contribute`/`payout`
+        // tries to move funds through it.
+        token::Client::new(&env, &token).decimals();
 
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Token, &token);
@@ -228,6 +258,9 @@ impl AjoContract {
         let members: Vec<Address> = env.storage().instance().get(&DataKey::Members).expect("not initialized");
         if !members.contains(&member) {
             panic!("not a member");
+        }
+        if Self::is_suspended(env.clone(), member.clone()) {
+            panic!("member is suspended");
         }
 
         // Check contribution using temporary storage
@@ -356,7 +389,8 @@ impl AjoContract {
             // Check contribution using temporary storage
             let paid: bool = Self::get_temp_contribution(&env, &m, current_cycle);
             if !paid {
-                env.events().publish((Symbol::new(&env, "member_defaulted"),), (m, current_cycle));
+                env.events().publish((Symbol::new(&env, "member_defaulted"),), (m.clone(), current_cycle));
+                Self::record_missed_contribution(&env, &m, current_cycle);
             }
         }
 
@@ -554,10 +588,66 @@ impl AjoContract {
         env.events().publish((Symbol::new(&env, "migrated"),), (from, STORAGE_VERSION));
     }
 
-    /// Upgrade contract WASM. Admin-only.
+    /// Propose an upgrade to `new_wasm_hash`. Admin-only.
+    ///
+    /// Starts the upgrade-governance timelock: the matching `upgrade` call
+    /// cannot execute until `UPGRADE_TIMELOCK_SECS` has elapsed. Proposing a
+    /// new hash replaces any previous pending proposal.
+    pub fn propose_upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).expect("not initialized");
+        admin.require_auth();
+
+        let effective_at = env.ledger().timestamp() + UPGRADE_TIMELOCK_SECS;
+        env.storage().instance().set(&DataKey::PendingUpgradeHash, &new_wasm_hash);
+        env.storage().instance().set(&DataKey::PendingUpgradeTime, &effective_at);
+
+        env.events().publish(
+            (Symbol::new(&env, "upgrade_proposed"),),
+            (new_wasm_hash, effective_at),
+        );
+    }
+
+    /// Cancel a pending upgrade proposal. Admin-only. No-op if none pending.
+    pub fn cancel_upgrade(env: Env) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).expect("not initialized");
+        admin.require_auth();
+
+        env.storage().instance().remove(&DataKey::PendingUpgradeHash);
+        env.storage().instance().remove(&DataKey::PendingUpgradeTime);
+
+        env.events().publish((Symbol::new(&env, "upgrade_cancelled"),), ());
+    }
+
+    /// Execute a previously proposed upgrade to `new_wasm_hash`. Admin-only.
+    ///
+    /// Requires a matching `propose_upgrade` call whose timelock
+    /// (`UPGRADE_TIMELOCK_SECS`) has elapsed. This is the upgrade-governance
+    /// boundary for #55: an admin can no longer swap the contract WASM in a
+    /// single, immediate call.
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
         let admin: Address = env.storage().instance().get(&DataKey::Admin).expect("not initialized");
         admin.require_auth();
+
+        let pending_hash: BytesN<32> = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingUpgradeHash)
+            .expect("no pending upgrade proposed");
+        if pending_hash != new_wasm_hash {
+            panic!("new_wasm_hash does not match the pending upgrade proposal");
+        }
+
+        let effective_at: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingUpgradeTime)
+            .expect("no pending upgrade proposed");
+        if env.ledger().timestamp() < effective_at {
+            panic!("upgrade timelock has not elapsed");
+        }
+
+        env.storage().instance().remove(&DataKey::PendingUpgradeHash);
+        env.storage().instance().remove(&DataKey::PendingUpgradeTime);
 
         env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
 
@@ -593,6 +683,13 @@ impl AjoContract {
 
     pub fn get_members(env: Env) -> Vec<Address> {
         env.storage().instance().get(&DataKey::Members).unwrap_or(vec![&env])
+    }
+
+    /// Returns the token (and therefore issuer) this circle is configured to
+    /// use, so integrators can verify a deployed circle's asset before
+    /// trusting it with funds instead of relying solely on client-side config.
+    pub fn get_token(env: Env) -> Address {
+        env.storage().instance().get(&DataKey::Token).expect("not initialized")
     }
 
     pub fn get_payout_order(env: Env) -> Vec<u32> {
@@ -648,8 +745,98 @@ impl AjoContract {
         let admin: Address = env.storage().instance().get(&DataKey::Admin).expect("not initialized");
         admin.require_auth();
 
+        if extend_to < MIN_TTL_EXTEND_TO {
+            panic!("extend_to below minimum ttl");
+        }
+        if threshold == 0 || threshold > extend_to {
+            panic!("threshold must be in 1..=extend_to");
+        }
+        let max_ttl = env.storage().max_ttl();
+        if extend_to > max_ttl {
+            panic!("extend_to exceeds max ttl");
+        }
+
         env.storage().instance().set(&DataKey::TtlThreshold, &threshold);
         env.storage().instance().set(&DataKey::TtlExtendTo, &extend_to);
+        env.events().publish(
+            (Symbol::new(&env, "ttl_config_updated"),),
+            (admin, threshold, extend_to),
+        );
+    }
+
+    // ── Missed contribution policy (issue #50) ────────────────────────────────
+
+    /// Set how many missed cycles a member may accumulate in this circle
+    /// before being suspended. Admin-only. Must be between 1 and max_members.
+    pub fn set_missed_policy(env: Env, max_missed: u32) {
+        Self::extend_instance_ttl(&env);
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).expect("not initialized");
+        admin.require_auth();
+
+        let max_members: u32 = env.storage().instance().get(&DataKey::MaxMembers).expect("not initialized");
+        if max_missed == 0 || max_missed > max_members {
+            panic!("max_missed must be between 1 and max_members");
+        }
+        env.storage().instance().set(&DataKey::MaxMissedContributions, &max_missed);
+        env.events().publish((Symbol::new(&env, "missed_policy_updated"),), (admin, max_missed));
+    }
+
+    /// Current missed-contribution threshold.
+    pub fn get_missed_policy(env: Env) -> u32 {
+        env.storage().instance().get(&DataKey::MaxMissedContributions).unwrap_or(DEFAULT_MAX_MISSED)
+    }
+
+    /// Lifetime missed contributions for a member.
+    pub fn get_missed_contributions(env: Env, member: Address) -> u32 {
+        env.storage().persistent().get(&DataKey::MissedContributions(member)).unwrap_or(0)
+    }
+
+    /// Whether a member is suspended from contributing in this circle.
+    pub fn is_suspended(env: Env, member: Address) -> bool {
+        env.storage().instance().get(&DataKey::Suspended(member)).unwrap_or(false)
+    }
+
+    /// Lift a suspension. Admin-only.
+    pub fn reinstate_member(env: Env, member: Address) {
+        Self::extend_instance_ttl(&env);
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).expect("not initialized");
+        admin.require_auth();
+
+        let members: Vec<Address> = env.storage().instance().get(&DataKey::Members).expect("not initialized");
+        if !members.contains(&member) {
+            panic!("not a member");
+        }
+        env.storage().instance().remove(&DataKey::Suspended(member.clone()));
+        env.events().publish((Symbol::new(&env, "member_reinstated"),), (member,));
+    }
+
+    fn record_missed_contribution(env: &Env, member: &Address, cycle: u32) {
+        let key = DataKey::MissedContributions(member.clone());
+        let missed: u32 = env.storage().persistent().get(&key).unwrap_or(0).saturating_add(1);
+        env.storage().persistent().set(&key, &missed);
+        Self::extend_persistent_ttl(env, &key);
+
+        // Missing a cycle counts against on-time reputation.
+        let total_key = DataKey::TotalContributions(member.clone());
+        let total: u32 = env.storage().persistent().get(&total_key).unwrap_or(0);
+        env.storage().persistent().set(&total_key, &total.saturating_add(1));
+        Self::update_reputation(env, member);
+
+        env.events().publish(
+            (Symbol::new(env, "contribution_missed"),),
+            (member.clone(), cycle, missed),
+        );
+
+        let max_missed: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MaxMissedContributions)
+            .unwrap_or(DEFAULT_MAX_MISSED);
+        let already: bool = env.storage().instance().get(&DataKey::Suspended(member.clone())).unwrap_or(false);
+        if missed >= max_missed && !already {
+            env.storage().instance().set(&DataKey::Suspended(member.clone()), &true);
+            env.events().publish((Symbol::new(env, "member_suspended"),), (member.clone(), missed));
+        }
     }
 
     /// Set contribution status in temporary storage (expires when circle completes)
@@ -664,6 +851,7 @@ impl AjoContract {
 
     fn set_temp_contribution(env: &Env, member: &Address, cycle: u32, contributed: bool) {
         env.storage().temporary().set(&DataKey::Contributions(member.clone(), cycle), &contributed);
+        Self::extend_temp_storage_ttl(env, member, cycle);
     }
 
     /// Get contribution status from temporary storage
@@ -689,11 +877,23 @@ impl AjoContract {
             .extend_ttl(threshold, extend_to);
     }
 
-    /// Extend TTL for temporary storage entries when needed
-    /// Temporary storage uses lower TTL defaults for automatic cleanup
+    /// Extend TTL for a temporary contribution entry (issue #51).
+    ///
+    /// The entry must outlive the cycle it belongs to, otherwise it could
+    /// expire before `payout` checks it and a paying member would be treated
+    /// as defaulted. The TTL covers the cycle interval (converted to ledgers,
+    /// ~5s each) plus a one-day buffer, capped at the network max TTL.
     fn extend_temp_storage_ttl(env: &Env, member: &Address, cycle: u32) {
         let temp_entry = DataKey::Contributions(member.clone(), cycle);
-        env.storage().temporary().extend_ttl(&temp_entry, DAY_IN_LEDGERS, 7 * DAY_IN_LEDGERS);
+        let interval: u64 = env.storage().instance().get(&DataKey::CycleIntervalSecs).unwrap_or(0);
+        let extend_to = Self::temp_ttl_for_interval(env, interval);
+        env.storage().temporary().extend_ttl(&temp_entry, TEMP_LIFETIME_THRESHOLD.min(extend_to), extend_to);
+    }
+
+    fn temp_ttl_for_interval(env: &Env, interval_secs: u64) -> u32 {
+        let ledgers = (interval_secs / 5).saturating_add(DAY_IN_LEDGERS as u64);
+        let wanted = if ledgers > u32::MAX as u64 { u32::MAX } else { ledgers as u32 };
+        wanted.max(7 * DAY_IN_LEDGERS).min(env.storage().max_ttl())
     }
 
     fn extend_persistent_ttl(env: &Env, key: &DataKey) {
@@ -949,13 +1149,98 @@ mod tests {
         let (_, _, _, _, client) = setup(&env);
         client.accept_admin();
     }
+
+    // ─── Event schema compatibility (issue #59) ──────────────────────────────
+    //
+    // Off-chain consumers (e.g. src/server/services/event-indexer.service.ts)
+    // decode published events positionally by topic. These tests lock the
+    // exact topic name + tuple shape of the events that feed that indexer,
+    // so a future change that reorders or retypes a field is caught here
+    // instead of silently breaking off-chain consumers.
+
+    #[test]
+    fn test_initialized_event_schema() {
+        use soroban_sdk::{testutils::Events, TryFromVal};
+
+        let env = Env::default();
+        env.mock_all_auths();
+        let (admin, _, _, _, _) = setup(&env);
+
+        let sym = Symbol::new(&env, "initialized");
+        let found = env.events().all().iter().any(|(_, topics, data)| {
+            if topics.len() != 1 { return false; }
+            let Ok(t) = Symbol::try_from_val(&env, &topics.get(0).unwrap()) else { return false; };
+            if t != sym { return false; }
+            let Ok((a, max_members, amount)) = <(Address, u32, i128)>::try_from_val(&env, data) else { return false; };
+            a == admin && max_members == 3 && amount == 100_000_000
+        });
+        assert!(
+            found,
+            "'initialized' event schema changed: expected (admin: Address, max_members: u32, contribution_amount: i128)"
+        );
+    }
+
+    #[test]
+    fn test_member_joined_event_schema() {
+        use soroban_sdk::{testutils::Events, TryFromVal};
+
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_, members, _, _, client) = setup(&env);
+        let member = members.get(0).unwrap();
+        client.join(&member);
+
+        let sym = Symbol::new(&env, "member_joined");
+        let found = env.events().all().iter().any(|(_, topics, data)| {
+            if topics.len() != 1 { return false; }
+            let Ok(t) = Symbol::try_from_val(&env, &topics.get(0).unwrap()) else { return false; };
+            if t != sym { return false; }
+            let Ok((m, amount)) = <(Address, i128)>::try_from_val(&env, data) else { return false; };
+            m == member && amount == 100_000_000
+        });
+        assert!(
+            found,
+            "'member_joined' event schema changed: expected (member: Address, amount: i128)"
+        );
+    }
+
+    #[test]
+    fn test_contribution_made_event_schema() {
+        use soroban_sdk::{testutils::Events, TryFromVal};
+
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_, members, _, _, client) = setup(&env);
+        for m in members.iter() { client.join(m); }
+
+        let member = members.get(0).unwrap();
+        env.ledger().with_mut(|l| l.timestamp = 86401);
+        client.payout();
+        client.contribute(&member, &100_000_000);
+
+        let sym = Symbol::new(&env, "contribution_made");
+        let found = env.events().all().iter().any(|(_, topics, data)| {
+            if topics.len() != 1 { return false; }
+            let Ok(t) = Symbol::try_from_val(&env, &topics.get(0).unwrap()) else { return false; };
+            if t != sym { return false; }
+            let Ok((m, amount, cycle)) = <(Address, i128, u32)>::try_from_val(&env, data) else { return false; };
+            m == member && amount == 100_000_000 && cycle == 2
+        });
+        assert!(
+            found,
+            "'contribution_made' event schema changed: expected (member: Address, amount: i128, cycle: u32)"
+        );
+    }
 }
 
 #[cfg(test)]
 mod integration_tests;
 
 #[cfg(test)]
+mod benchmarks;
+
+#[cfg(test)]
 mod fuzz_tests;
 
 #[cfg(test)]
-mod lifecycle_tests;
+mod policy_tests;
