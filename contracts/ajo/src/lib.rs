@@ -109,6 +109,15 @@ impl AjoContract {
 
         admin.require_auth();
 
+        // ─── Token issuer safeguard ────────────────────────────────────────────
+        // `token` is admin-supplied and, once set here, can never be changed for
+        // the lifetime of this circle (there is no `set_token`/update path).
+        // Probe it with a standard SEP-41 read before persisting any state, so a
+        // bad or non-token address fails atomically in this same call instead of
+        // silently bricking the circle the first time `join`/`contribute`/`payout`
+        // tries to move funds through it.
+        token::Client::new(&env, &token).decimals();
+
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Token, &token);
         env.storage().instance().set(&DataKey::ContributionAmount, &contribution_amount);
@@ -548,6 +557,13 @@ impl AjoContract {
 
     pub fn get_members(env: Env) -> Vec<Address> {
         env.storage().instance().get(&DataKey::Members).unwrap_or(vec![&env])
+    }
+
+    /// Returns the token (and therefore issuer) this circle is configured to
+    /// use, so integrators can verify a deployed circle's asset before
+    /// trusting it with funds instead of relying solely on client-side config.
+    pub fn get_token(env: Env) -> Address {
+        env.storage().instance().get(&DataKey::Token).expect("not initialized")
     }
 
     pub fn get_payout_order(env: Env) -> Vec<u32> {

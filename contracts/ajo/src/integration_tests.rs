@@ -162,6 +162,34 @@ let (cycle, max, _, completed, _) = client.get_state();
         client.initialize(&admin, &token_id, &100_000_000, &21, &86_400);
     }
 
+    /// initialize: token issuer safeguard — rejects an address that isn't a
+    /// real SEP-41 token contract (issue #58), instead of persisting it and
+    /// only failing later inside `join`/`contribute`/`payout`.
+    #[test]
+    #[should_panic]
+    fn test_initialize_rejects_non_token_address() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+
+        // A real (non-token) contract, standing in for a bad/malicious
+        // "token" address an admin could otherwise fat-finger into `initialize`.
+        let not_a_token = env.register_contract(None, AjoContract);
+
+        let contract_id = env.register_contract(None, AjoContract);
+        let client = AjoContractClient::new(&env, &contract_id);
+        client.initialize(&admin, &not_a_token, &100_000_000, &2, &86_400);
+    }
+
+    /// get_token: returns the exact token address configured at initialize,
+    /// so integrators can verify a deployed circle's asset/issuer on-chain.
+    #[test]
+    fn test_get_token_returns_configured_token() {
+        let f = setup_fixture(2);
+        let token_address = f.token.address.clone();
+        assert_eq!(f.client.get_token(), token_address);
+    }
+
     /// join: rejects duplicate member
     #[test]
     #[should_panic(expected = "already a member")]
