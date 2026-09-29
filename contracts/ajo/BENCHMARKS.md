@@ -35,26 +35,28 @@
 
 ## Benchmark Methodology
 
-Tests run using Soroban SDK testutils with ledger fee simulation:
+Real CPU/memory cost benchmarks live in `src/benchmarks.rs` and use
+soroban-sdk's `testutils` budget API (`env.budget()`), which is the SDK's
+own resource-accounting mechanism — not an event-log proxy. Each test
+resets the budget, runs one entrypoint (`join`, `contribute`, `payout`,
+`propose_admin`+`accept_admin`), and asserts the reported CPU instruction
+count stays under a regression ceiling:
 
 ```rust
-// Example benchmark test
-#[test]
-fn bench_join_operation() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let (_, members, _, _, client) = setup(&env);
-    
-    let mut total_fees: i64 = 0;
-    for m in members.iter() {
-        let fees_before = env.ledger().read_events().len();
-        client.join(m);
-        let fees_after = env.ledger().read_events().len();
-        total_fees += fees_after - fees_before;
-    }
-    // Verify temp storage used instead of instance
+fn measure(env: &Env, label: &str, f: impl FnOnce()) -> u64 {
+    env.budget().reset_default();
+    f();
+    let cpu = env.budget().cpu_instruction_cost();
+    let mem = env.budget().memory_bytes_cost();
+    println!("[bench] {label}: cpu_instructions={cpu} memory_bytes={mem}");
+    assert!(cpu < CPU_CEILING, "{label} exceeded the CPU regression ceiling");
+    cpu
 }
 ```
+
+Run locally with `cargo test --package stellar-ajo bench -- --nocapture`
+to see the printed cost breakdown; CI runs the same command on every push
+(`.github/workflows/ci.yml`, job `contract-cost-benchmarks`).
 
 ## Storage Classification Rationale
 

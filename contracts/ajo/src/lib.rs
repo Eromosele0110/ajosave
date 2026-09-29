@@ -902,4 +902,7 @@ mod tests {
 mod integration_tests;
 
 #[cfg(test)]
+mod benchmarks;
+
+#[cfg(test)]
 mod fuzz_tests;
