@@ -32,6 +32,13 @@ const INSTANCE_LIFETIME_THRESHOLD: u32 = DAY_IN_LEDGERS;
 const PERSISTENT_BUMP_AMOUNT: u32 = 30 * DAY_IN_LEDGERS;
 const PERSISTENT_LIFETIME_THRESHOLD: u32 = 7 * DAY_IN_LEDGERS;
 
+// ─── Upgrade governance ───────────────────────────────────────────────────────
+/// Minimum delay (seconds) between `propose_upgrade` and a matching `upgrade`
+/// call taking effect. Gives circle members visibility/time to react (e.g.
+/// exit) before new contract logic goes live, instead of an admin being able
+/// to swap the WASM instantly and unilaterally.
+const UPGRADE_TIMELOCK_SECS: u64 = 172_800; // 48 hours
+
 // ─── Storage keys ─────────────────────────────────────────────────────────────
 
 /// Storage key classification for optimization:
@@ -45,6 +52,8 @@ pub enum DataKey {
     // ─── Instance storage (core circle configuration) ────────────────────────────
     Admin,
     PendingAdmin,
+    PendingUpgradeHash,
+    PendingUpgradeTime,
     Token,
     ContributionAmount,
     MaxMembers,
@@ -509,10 +518,66 @@ impl AjoContract {
         env.events().publish((Symbol::new(&env, "migrated"),), (from, STORAGE_VERSION));
     }
 
-    /// Upgrade contract WASM. Admin-only.
+    /// Propose an upgrade to `new_wasm_hash`. Admin-only.
+    ///
+    /// Starts the upgrade-governance timelock: the matching `upgrade` call
+    /// cannot execute until `UPGRADE_TIMELOCK_SECS` has elapsed. Proposing a
+    /// new hash replaces any previous pending proposal.
+    pub fn propose_upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).expect("not initialized");
+        admin.require_auth();
+
+        let effective_at = env.ledger().timestamp() + UPGRADE_TIMELOCK_SECS;
+        env.storage().instance().set(&DataKey::PendingUpgradeHash, &new_wasm_hash);
+        env.storage().instance().set(&DataKey::PendingUpgradeTime, &effective_at);
+
+        env.events().publish(
+            (Symbol::new(&env, "upgrade_proposed"),),
+            (new_wasm_hash, effective_at),
+        );
+    }
+
+    /// Cancel a pending upgrade proposal. Admin-only. No-op if none pending.
+    pub fn cancel_upgrade(env: Env) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).expect("not initialized");
+        admin.require_auth();
+
+        env.storage().instance().remove(&DataKey::PendingUpgradeHash);
+        env.storage().instance().remove(&DataKey::PendingUpgradeTime);
+
+        env.events().publish((Symbol::new(&env, "upgrade_cancelled"),), ());
+    }
+
+    /// Execute a previously proposed upgrade to `new_wasm_hash`. Admin-only.
+    ///
+    /// Requires a matching `propose_upgrade` call whose timelock
+    /// (`UPGRADE_TIMELOCK_SECS`) has elapsed. This is the upgrade-governance
+    /// boundary for #55: an admin can no longer swap the contract WASM in a
+    /// single, immediate call.
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
         let admin: Address = env.storage().instance().get(&DataKey::Admin).expect("not initialized");
         admin.require_auth();
+
+        let pending_hash: BytesN<32> = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingUpgradeHash)
+            .expect("no pending upgrade proposed");
+        if pending_hash != new_wasm_hash {
+            panic!("new_wasm_hash does not match the pending upgrade proposal");
+        }
+
+        let effective_at: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingUpgradeTime)
+            .expect("no pending upgrade proposed");
+        if env.ledger().timestamp() < effective_at {
+            panic!("upgrade timelock has not elapsed");
+        }
+
+        env.storage().instance().remove(&DataKey::PendingUpgradeHash);
+        env.storage().instance().remove(&DataKey::PendingUpgradeTime);
 
         env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
 

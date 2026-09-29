@@ -1,6 +1,22 @@
 # Contract Upgrade Guide
 
-The Ajo contract exposes an admin-only `upgrade(new_wasm_hash)` function that replaces the running WASM in-place using Soroban's `update_current_contract_wasm`. All storage (members, cycles, balances) is preserved across upgrades.
+The Ajo contract exposes an admin-only, two-step **upgrade governance**
+flow that replaces the running WASM in-place using Soroban's
+`update_current_contract_wasm`. All storage (members, cycles, balances) is
+preserved across upgrades.
+
+1. `propose_upgrade(new_wasm_hash)` — admin proposes a new WASM hash and
+   starts a 48-hour timelock (`UPGRADE_TIMELOCK_SECS`), emitting an
+   `upgrade_proposed` event with the hash and the earliest execution time.
+   This is the governance boundary for #55: it gives circle members a
+   window to notice a pending upgrade (via the emitted event / an indexer)
+   and exit before new logic goes live, instead of an admin being able to
+   swap the contract instantly and unilaterally.
+2. `cancel_upgrade()` — admin may cancel a pending proposal at any time
+   before it executes, emitting `upgrade_cancelled`.
+3. `upgrade(new_wasm_hash)` — executes a previously proposed upgrade.
+   Reverts if there is no pending proposal, if `new_wasm_hash` doesn't
+   match the proposed hash, or if the timelock hasn't elapsed yet.
 
 ## Prerequisites
 
@@ -27,7 +43,21 @@ stellar contract upload \
 # Prints: <NEW_WASM_HASH>
 ```
 
-### 3. Call `upgrade` on the existing contract
+### 3. Propose the upgrade
+
+```bash
+stellar contract invoke \
+  --network testnet \
+  --source <ADMIN_SECRET_KEY> \
+  --id <CONTRACT_ID> \
+  -- propose_upgrade \
+  --new_wasm_hash <NEW_WASM_HASH>
+```
+
+This starts the 48-hour governance timelock and emits `upgrade_proposed`.
+Wait for the timelock to elapse (or `cancel_upgrade` to abort).
+
+### 4. Execute the upgrade
 
 ```bash
 stellar contract invoke \
@@ -44,7 +74,7 @@ The contract emits an `upgraded` event containing the new WASM hash. Verify it i
 stellar events --contract-id <CONTRACT_ID> --topic upgraded
 ```
 
-### 4. Verify
+### 5. Verify
 
 ```bash
 stellar contract invoke \
