@@ -29,3 +29,63 @@ jobs:
             -d '{
               "text": ":red_circle: *Ajosave is DOWN*\nHealth check returned HTTP ${{ steps.check.outputs.status }}\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>"
             }'
+
+  journey:
+    name: Synthetic Journey Probe
+    runs-on: ubuntu-latest
+    steps:
+      - name: Visitor journey — browse circles, check FX rate
+        id: journey
+        run: |
+          set -o pipefail
+          BASE="${{ vars.NEXT_PUBLIC_APP_URL }}"
+          FAILED_STEP=""
+
+          # Step 1: platform health must be reachable and report a real status.
+          HEALTH_BODY=$(curl -s -w '\n%{http_code}' "$BASE/api/v1/health")
+          HEALTH_STATUS=$(echo "$HEALTH_BODY" | tail -n1)
+          HEALTH_JSON=$(echo "$HEALTH_BODY" | sed '$d')
+          if [ "$HEALTH_STATUS" != "200" ]; then
+            FAILED_STEP="health (HTTP $HEALTH_STATUS)"
+          fi
+
+          # Step 2: an anonymous visitor can browse the open-circles listing —
+          # this exercises the DB-backed circle service + pagination, not just
+          # a liveness ping.
+          if [ -z "$FAILED_STEP" ]; then
+            CIRCLES_BODY=$(curl -s -w '\n%{http_code}' "$BASE/api/v1/circles?limit=1")
+            CIRCLES_STATUS=$(echo "$CIRCLES_BODY" | tail -n1)
+            CIRCLES_JSON=$(echo "$CIRCLES_BODY" | sed '$d')
+            CIRCLES_OK=$(echo "$CIRCLES_JSON" | jq -r '.success' 2>/dev/null || echo "false")
+            if [ "$CIRCLES_STATUS" != "200" ] || [ "$CIRCLES_OK" != "true" ]; then
+              FAILED_STEP="browse circles (HTTP $CIRCLES_STATUS, success=$CIRCLES_OK)"
+            fi
+          fi
+
+          # Step 3: the NGN/USDC FX quote a visitor sees before joining a
+          # circle must resolve to a real numeric rate.
+          if [ -z "$FAILED_STEP" ]; then
+            FX_BODY=$(curl -s -w '\n%{http_code}' "$BASE/api/fx/rate?currency=NGN")
+            FX_STATUS=$(echo "$FX_BODY" | tail -n1)
+            FX_JSON=$(echo "$FX_BODY" | sed '$d')
+            FX_RATE=$(echo "$FX_JSON" | jq -r '.data.rate // empty' 2>/dev/null)
+            if [ "$FX_STATUS" != "200" ] || [ -z "$FX_RATE" ] || [ "$FX_RATE" = "null" ]; then
+              FAILED_STEP="fx rate (HTTP $FX_STATUS, rate=$FX_RATE)"
+            fi
+          fi
+
+          echo "failed_step=$FAILED_STEP" >> $GITHUB_OUTPUT
+          if [ -n "$FAILED_STEP" ]; then
+            echo "JOURNEY BROKEN at step: $FAILED_STEP"
+            exit 1
+          fi
+          echo "Journey OK: health -> browse circles -> fx rate"
+
+      - name: Alert Slack on broken journey
+        if: failure()
+        run: |
+          curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "text": ":warning: *Ajosave journey probe failed*\nStep: ${{ steps.journey.outputs.failed_step }}\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>"
+            }'
