@@ -374,7 +374,72 @@ let (cycle, max, _, completed, _) = client.get_state();
         f.client.payout(); // must panic: "payout already in progress"
     }
 
-        // ─── Upgrade tests ────────────────────────────────────────────────────────
+    // ─── Fund-locking review checklist tests (issue #60) ─────────────────────
+    //
+    // These cover the custody invariants called out in
+    // contracts/ajo/FUND_LOCKING_CHECKLIST.md: the emergency pause must
+    // actually stop fund movement in both directions, and a fully-funded
+    // payout must fully drain the pot it pays out (no residual dust left
+    // locked in the contract).
+
+    /// pause: blocks contribute while paused, so a member's funds stay in
+    /// their own account rather than moving into a frozen contract.
+    #[test]
+    #[should_panic(expected = "contract is paused")]
+    fn test_paused_blocks_contribute() {
+        let f = setup_fixture(2);
+        for m in f.members.iter() { f.client.join(m); }
+        f.client.pause();
+        f.client.contribute(&f.members.get(0).unwrap(), &f.contribution);
+    }
+
+    /// pause: blocks payout while paused, so pooled member funds stay put
+    /// instead of being paid out while the circle is frozen for review.
+    #[test]
+    #[should_panic(expected = "contract is paused")]
+    fn test_paused_blocks_payout() {
+        let f = setup_fixture(2);
+        for m in f.members.iter() { f.client.join(m); }
+        f.env.ledger().with_mut(|l| l.timestamp = f.interval + 1);
+        f.client.pause();
+        f.client.payout();
+    }
+
+    /// unpause: restores normal fund movement — funds are not permanently
+    /// stuck once the emergency pause is lifted.
+    #[test]
+    fn test_unpause_restores_payout() {
+        let f = setup_fixture(2);
+        for m in f.members.iter() { f.client.join(m); }
+        f.env.ledger().with_mut(|l| l.timestamp = f.interval + 1);
+
+        f.client.pause();
+        f.client.unpause();
+
+        f.client.payout(); // must succeed now that the pause has been lifted
+        let (cycle, _, _, _, _) = f.client.get_state();
+        assert_eq!(cycle, 2);
+    }
+
+    /// Fund custody: a fully-contributed cycle's payout drains the contract's
+    /// own token balance to exactly zero — no residual funds are left locked
+    /// in the contract for that cycle.
+    #[test]
+    fn test_payout_drains_contract_balance_when_fully_funded() {
+        let f = setup_fixture(3);
+        for m in f.members.iter() { f.client.join(m); }
+
+        f.env.ledger().with_mut(|l| l.timestamp = f.interval + 1);
+        f.client.payout();
+
+        let contract_balance = f.token.balance(&f.client.address);
+        assert_eq!(
+            contract_balance, 0,
+            "contract should hold no residual funds after a fully-funded cycle payout"
+        );
+    }
+
+    // ─── Upgrade tests ────────────────────────────────────────────────────────
 
     /// upgrade: admin can upgrade the contract WASM and event is emitted
     #[test]
