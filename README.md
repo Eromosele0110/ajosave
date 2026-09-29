@@ -125,11 +125,8 @@ git clone https://github.com/joekeyz8/ajosave.git
 cd ajosave
 npm install
 cp .env.example .env.local
-# Fill in environment variables (see .env.example for descriptions)
-
-# Start Postgres + Redis locally
-docker-compose up -d
-
+# Fill in environment variables — see docs/environment-variables.md for what
+# each one does and which are required in production
 npm run dev
 # → http://localhost:3000
 ```
