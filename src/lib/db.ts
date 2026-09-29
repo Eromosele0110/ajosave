@@ -18,6 +18,7 @@
  * - Connection timeout is 5s
  */
 import { Pool, type QueryResult, type QueryResultRow } from "pg";
+import { recordQuery } from "./query-metrics";
 import { serverConfig } from "@/server/config";
 
 const _DB_POOL_SIZE = parseInt(process.env.DB_POOL_SIZE ?? "10", 10);
@@ -116,7 +117,15 @@ export async function query<T extends QueryResultRow = QueryResultRow>(
   let lastErr: unknown;
   for (let attempt = 1; attempt <= DB_MAX_RETRIES; attempt++) {
     try {
-      return await getPool().query<T>(text, params);
+      const started = Date.now();
+      try {
+        const result = await getPool().query<T>(text, params);
+        recordQuery(text, Date.now() - started);
+        return result;
+      } catch (e) {
+        recordQuery(text, Date.now() - started, true);
+        throw e;
+      }
     } catch (err) {
       lastErr = err;
       const isTransient =
