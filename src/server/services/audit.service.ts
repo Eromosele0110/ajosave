@@ -9,6 +9,7 @@ export type AuditAction =
   | "DELETE_USER"
   | "DELETE_CIRCLE"
   | "UPDATE_CIRCLE"
+  | "DELETE_MESSAGE"
   | "OTHER"
   // ── Privileged audit events ──────────────────────────────────────────────
   /** Admin or operator forcefully bypassed normal flow */
@@ -32,7 +33,7 @@ export type AuditAction =
   /** Fee or penalty manually waived by operator */
   | "FEE_WAIVER";
 
-export type AuditTargetType = "CIRCLE" | "MEMBER" | "USER" | "PAYOUT" | "OTHER";
+export type AuditTargetType = "CIRCLE" | "MEMBER" | "USER" | "PAYOUT" | "MESSAGE" | "OTHER";
 
 /**
  * Privilege level for the action.

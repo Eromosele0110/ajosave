@@ -1,5 +1,10 @@
 # Database Migrations
 
+> **Setting up a local database?** See [docs/LOCAL_DATABASE.md](./LOCAL_DATABASE.md) first —
+> the `npm run migrate` workflow described below is not currently wired up
+> (missing `node-pg-migrate` dependency and package.json scripts); that doc
+> explains the honest current state and the reliable local workaround.
+
 Ajosave uses [node-pg-migrate](https://salsita.github.io/node-pg-migrate/) for schema migrations.  
 Migration files live in `migrations/` and are TypeScript files with `up` and `down` exports.
 

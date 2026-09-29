@@ -1,0 +1,107 @@
+name: Deploy to Production
+
+# Manually-triggered production deploy, gated by the "production" GitHub
+# Environment. The approval gate itself (required reviewers) is a repo
+# *setting*, not workflow code — see docs/DEPLOYMENT_APPROVAL_ROLLBACK.md
+# for the one-time admin setup. Once required reviewers are configured on
+# the "production" environment, this job pauses for approval before it can
+# run, and every run is recorded as a GitHub Deployment against that
+# environment (visible under Settings → Environments → production →
+# Deployment history), which rollback.yml reads from.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref (tag, branch, or SHA) to deploy to production"
+        required: false
+        default: "main"
+
+jobs:
+  deploy-production:
+    name: Deploy Production
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+
+      - run: npm ci
+
+      - name: Build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_APP_URL: ${{ vars.PRODUCTION_URL }}
+          NEXT_PUBLIC_APP_NAME: Ajosave
+          NEXTAUTH_URL: ${{ vars.PRODUCTION_URL }}
+          NEXTAUTH_SECRET: ${{ secrets.NEXTAUTH_SECRET }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          STELLAR_NETWORK: ${{ vars.STELLAR_NETWORK || 'mainnet' }}
+          STELLAR_HORIZON_URL: ${{ vars.STELLAR_HORIZON_URL }}
+          STELLAR_NETWORK_PASSPHRASE: ${{ vars.STELLAR_NETWORK_PASSPHRASE }}
+          STELLAR_AJO_CONTRACT_ID: ${{ secrets.STELLAR_CONTRACT_ID }}
+          STELLAR_SERVER_SECRET_KEY: ${{ secrets.STELLAR_SERVER_SECRET_KEY }}
+          STELLAR_SOROBAN_RPC_URL: ${{ vars.STELLAR_SOROBAN_RPC_URL }}
+          USDC_ISSUER: ${{ vars.USDC_ISSUER }}
+          USDC_ASSET_CODE: USDC
+          PAYSTACK_SECRET_KEY: ${{ secrets.PAYSTACK_SECRET_KEY }}
+          TERMII_API_KEY: ${{ secrets.TERMII_API_KEY }}
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          NEXT_PUBLIC_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+
+      - name: Deploy to Vercel (Production)
+        id: vercel
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          vercel-args: "--prebuilt --prod"
+
+      - name: Resolve deployed SHA
+        id: resolved
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Record deployment
+        uses: actions/github-script@v7
+        env:
+          DEPLOY_URL: ${{ steps.vercel.outputs.preview-url }}
+          DEPLOYED_SHA: ${{ steps.resolved.outputs.sha }}
+        with:
+          script: |
+            const deployment = await github.rest.repos.createDeployment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: process.env.DEPLOYED_SHA,
+              environment: 'production',
+              auto_merge: false,
+              required_contexts: [],
+              description: `Deployed via workflow run ${context.runId}`,
+            });
+            if (deployment.data && deployment.data.id) {
+              await github.rest.repos.createDeploymentStatus({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                deployment_id: deployment.data.id,
+                state: 'success',
+                environment: 'production',
+                environment_url: process.env.DEPLOY_URL || undefined,
+                description: 'Production deploy succeeded',
+              });
+            }
+
+      - name: Summary
+        run: |
+          echo "### Production Deploy" >> $GITHUB_STEP_SUMMARY
+          echo "Deployed \`${{ steps.resolved.outputs.sha }}\` (ref: \`${{ inputs.ref }}\`)." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "To roll back, run the **Rollback Production** workflow." >> $GITHUB_STEP_SUMMARY

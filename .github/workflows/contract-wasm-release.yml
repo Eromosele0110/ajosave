@@ -1,0 +1,108 @@
+name: Verified Contract WASM Artifacts
+
+# Builds the Soroban contracts (ajo, certificate) reproducibly on every
+# release tag and manual dispatch, then publishes the compiled .wasm files
+# together with their SHA-256 checksums so anyone can rebuild from source
+# and verify the hash matches what was deployed on-chain (see
+# contracts/ajo/UPGRADE.md, which references a `<NEW_WASM_HASH>` that
+# previously had no corresponding published, checksummed artifact).
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to build from (tag, branch, or SHA)"
+        required: false
+        default: "main"
+
+permissions:
+  contents: write # upload release assets
+  id-token: write # OIDC token for provenance signing
+
+env:
+  RUST_BACKTRACE: 1
+
+jobs:
+  build-and-verify:
+    name: Build & Checksum WASM
+    runs-on: ubuntu-latest
+    outputs:
+      ajo_sha256: ${{ steps.hashes.outputs.ajo_sha256 }}
+      certificate_sha256: ${{ steps.hashes.outputs.certificate_sha256 }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust build artefacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts
+
+      - name: Install Stellar CLI
+        run: cargo install --locked stellar-cli --version ^22 || cargo install --locked stellar-cli
+
+      # Reproducible-ish release build: locked deps, release profile from
+      # contracts/ajo/Cargo.toml (opt-level "z", lto, stripped symbols).
+      - name: Build ajo contract WASM
+        working-directory: contracts
+        run: stellar contract build --package stellar-ajo
+
+      - name: Build certificate contract WASM
+        working-directory: contracts
+        run: stellar contract build --package certificate
+
+      - name: Compute SHA-256 checksums
+        id: hashes
+        run: |
+          set -euo pipefail
+          mkdir -p wasm-artifacts
+          AJO_WASM=$(find contracts/target/wasm32-unknown-unknown/release -maxdepth 1 -iname "*ajo*.wasm" | head -1)
+          CERT_WASM=$(find contracts/target/wasm32-unknown-unknown/release -maxdepth 1 -iname "*certificate*.wasm" | head -1)
+          if [ -z "$AJO_WASM" ] || [ -z "$CERT_WASM" ]; then
+            echo "::error::Could not locate built .wasm artifacts"
+            exit 1
+          fi
+          cp "$AJO_WASM" wasm-artifacts/ajo.wasm
+          cp "$CERT_WASM" wasm-artifacts/certificate.wasm
+          ( cd wasm-artifacts && sha256sum ajo.wasm certificate.wasm > SHA256SUMS.txt )
+          cat wasm-artifacts/SHA256SUMS.txt
+          echo "ajo_sha256=$(sha256sum wasm-artifacts/ajo.wasm | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          echo "certificate_sha256=$(sha256sum wasm-artifacts/certificate.wasm | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+      - name: Upload WASM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: contract-wasm
+          path: wasm-artifacts/
+          retention-days: 90
+
+      - name: Attach WASM artifacts to GitHub Release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.ref_name }}" \
+            wasm-artifacts/ajo.wasm \
+            wasm-artifacts/certificate.wasm \
+            wasm-artifacts/SHA256SUMS.txt \
+            --repo "${{ github.repository }}" \
+            --clobber
+
+      - name: Summary
+        run: |
+          echo "### Verified Contract WASM" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat wasm-artifacts/SHA256SUMS.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Rebuild locally with \`npm run contract:build\` and compare against \`SHA256SUMS.txt\` before trusting a deployed \`--wasm-hash\`." >> "$GITHUB_STEP_SUMMARY"

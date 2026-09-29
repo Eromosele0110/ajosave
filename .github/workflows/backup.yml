@@ -36,3 +36,8 @@ jobs:
         if: failure()
         run: |
           echo "::error::PostgreSQL backup failed — check logs immediately"
+          curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "text": ":red_circle: *Ajosave PostgreSQL backup FAILED*\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>"
+            }'

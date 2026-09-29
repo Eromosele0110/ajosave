@@ -32,6 +32,13 @@ const INSTANCE_LIFETIME_THRESHOLD: u32 = DAY_IN_LEDGERS;
 const PERSISTENT_BUMP_AMOUNT: u32 = 30 * DAY_IN_LEDGERS;
 const PERSISTENT_LIFETIME_THRESHOLD: u32 = 7 * DAY_IN_LEDGERS;
 
+// ─── Upgrade governance ───────────────────────────────────────────────────────
+/// Minimum delay (seconds) between `propose_upgrade` and a matching `upgrade`
+/// call taking effect. Gives circle members visibility/time to react (e.g.
+/// exit) before new contract logic goes live, instead of an admin being able
+/// to swap the WASM instantly and unilaterally.
+const UPGRADE_TIMELOCK_SECS: u64 = 172_800; // 48 hours
+
 // ─── Storage keys ─────────────────────────────────────────────────────────────
 
 /// Storage key classification for optimization:
@@ -45,6 +52,8 @@ pub enum DataKey {
     // ─── Instance storage (core circle configuration) ────────────────────────────
     Admin,
     PendingAdmin,
+    PendingUpgradeHash,
+    PendingUpgradeTime,
     Token,
     ContributionAmount,
     MaxMembers,
@@ -108,6 +117,15 @@ impl AjoContract {
         }
 
         admin.require_auth();
+
+        // ─── Token issuer safeguard ────────────────────────────────────────────
+        // `token` is admin-supplied and, once set here, can never be changed for
+        // the lifetime of this circle (there is no `set_token`/update path).
+        // Probe it with a standard SEP-41 read before persisting any state, so a
+        // bad or non-token address fails atomically in this same call instead of
+        // silently bricking the circle the first time `join`/`contribute`/`payout`
+        // tries to move funds through it.
+        token::Client::new(&env, &token).decimals();
 
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Token, &token);
@@ -509,10 +527,66 @@ impl AjoContract {
         env.events().publish((Symbol::new(&env, "migrated"),), (from, STORAGE_VERSION));
     }
 
-    /// Upgrade contract WASM. Admin-only.
+    /// Propose an upgrade to `new_wasm_hash`. Admin-only.
+    ///
+    /// Starts the upgrade-governance timelock: the matching `upgrade` call
+    /// cannot execute until `UPGRADE_TIMELOCK_SECS` has elapsed. Proposing a
+    /// new hash replaces any previous pending proposal.
+    pub fn propose_upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).expect("not initialized");
+        admin.require_auth();
+
+        let effective_at = env.ledger().timestamp() + UPGRADE_TIMELOCK_SECS;
+        env.storage().instance().set(&DataKey::PendingUpgradeHash, &new_wasm_hash);
+        env.storage().instance().set(&DataKey::PendingUpgradeTime, &effective_at);
+
+        env.events().publish(
+            (Symbol::new(&env, "upgrade_proposed"),),
+            (new_wasm_hash, effective_at),
+        );
+    }
+
+    /// Cancel a pending upgrade proposal. Admin-only. No-op if none pending.
+    pub fn cancel_upgrade(env: Env) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).expect("not initialized");
+        admin.require_auth();
+
+        env.storage().instance().remove(&DataKey::PendingUpgradeHash);
+        env.storage().instance().remove(&DataKey::PendingUpgradeTime);
+
+        env.events().publish((Symbol::new(&env, "upgrade_cancelled"),), ());
+    }
+
+    /// Execute a previously proposed upgrade to `new_wasm_hash`. Admin-only.
+    ///
+    /// Requires a matching `propose_upgrade` call whose timelock
+    /// (`UPGRADE_TIMELOCK_SECS`) has elapsed. This is the upgrade-governance
+    /// boundary for #55: an admin can no longer swap the contract WASM in a
+    /// single, immediate call.
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
         let admin: Address = env.storage().instance().get(&DataKey::Admin).expect("not initialized");
         admin.require_auth();
+
+        let pending_hash: BytesN<32> = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingUpgradeHash)
+            .expect("no pending upgrade proposed");
+        if pending_hash != new_wasm_hash {
+            panic!("new_wasm_hash does not match the pending upgrade proposal");
+        }
+
+        let effective_at: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingUpgradeTime)
+            .expect("no pending upgrade proposed");
+        if env.ledger().timestamp() < effective_at {
+            panic!("upgrade timelock has not elapsed");
+        }
+
+        env.storage().instance().remove(&DataKey::PendingUpgradeHash);
+        env.storage().instance().remove(&DataKey::PendingUpgradeTime);
 
         env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
 
@@ -548,6 +622,13 @@ impl AjoContract {
 
     pub fn get_members(env: Env) -> Vec<Address> {
         env.storage().instance().get(&DataKey::Members).unwrap_or(vec![&env])
+    }
+
+    /// Returns the token (and therefore issuer) this circle is configured to
+    /// use, so integrators can verify a deployed circle's asset before
+    /// trusting it with funds instead of relying solely on client-side config.
+    pub fn get_token(env: Env) -> Address {
+        env.storage().instance().get(&DataKey::Token).expect("not initialized")
     }
 
     pub fn get_payout_order(env: Env) -> Vec<u32> {
@@ -896,10 +977,95 @@ mod tests {
         let (_, _, _, _, client) = setup(&env);
         client.accept_admin();
     }
+
+    // ─── Event schema compatibility (issue #59) ──────────────────────────────
+    //
+    // Off-chain consumers (e.g. src/server/services/event-indexer.service.ts)
+    // decode published events positionally by topic. These tests lock the
+    // exact topic name + tuple shape of the events that feed that indexer,
+    // so a future change that reorders or retypes a field is caught here
+    // instead of silently breaking off-chain consumers.
+
+    #[test]
+    fn test_initialized_event_schema() {
+        use soroban_sdk::{testutils::Events, TryFromVal};
+
+        let env = Env::default();
+        env.mock_all_auths();
+        let (admin, _, _, _, _) = setup(&env);
+
+        let sym = Symbol::new(&env, "initialized");
+        let found = env.events().all().iter().any(|(_, topics, data)| {
+            if topics.len() != 1 { return false; }
+            let Ok(t) = Symbol::try_from_val(&env, &topics.get(0).unwrap()) else { return false; };
+            if t != sym { return false; }
+            let Ok((a, max_members, amount)) = <(Address, u32, i128)>::try_from_val(&env, data) else { return false; };
+            a == admin && max_members == 3 && amount == 100_000_000
+        });
+        assert!(
+            found,
+            "'initialized' event schema changed: expected (admin: Address, max_members: u32, contribution_amount: i128)"
+        );
+    }
+
+    #[test]
+    fn test_member_joined_event_schema() {
+        use soroban_sdk::{testutils::Events, TryFromVal};
+
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_, members, _, _, client) = setup(&env);
+        let member = members.get(0).unwrap();
+        client.join(&member);
+
+        let sym = Symbol::new(&env, "member_joined");
+        let found = env.events().all().iter().any(|(_, topics, data)| {
+            if topics.len() != 1 { return false; }
+            let Ok(t) = Symbol::try_from_val(&env, &topics.get(0).unwrap()) else { return false; };
+            if t != sym { return false; }
+            let Ok((m, amount)) = <(Address, i128)>::try_from_val(&env, data) else { return false; };
+            m == member && amount == 100_000_000
+        });
+        assert!(
+            found,
+            "'member_joined' event schema changed: expected (member: Address, amount: i128)"
+        );
+    }
+
+    #[test]
+    fn test_contribution_made_event_schema() {
+        use soroban_sdk::{testutils::Events, TryFromVal};
+
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_, members, _, _, client) = setup(&env);
+        for m in members.iter() { client.join(m); }
+
+        let member = members.get(0).unwrap();
+        env.ledger().with_mut(|l| l.timestamp = 86401);
+        client.payout();
+        client.contribute(&member, &100_000_000);
+
+        let sym = Symbol::new(&env, "contribution_made");
+        let found = env.events().all().iter().any(|(_, topics, data)| {
+            if topics.len() != 1 { return false; }
+            let Ok(t) = Symbol::try_from_val(&env, &topics.get(0).unwrap()) else { return false; };
+            if t != sym { return false; }
+            let Ok((m, amount, cycle)) = <(Address, i128, u32)>::try_from_val(&env, data) else { return false; };
+            m == member && amount == 100_000_000 && cycle == 2
+        });
+        assert!(
+            found,
+            "'contribution_made' event schema changed: expected (member: Address, amount: i128, cycle: u32)"
+        );
+    }
 }
 
 #[cfg(test)]
 mod integration_tests;
+
+#[cfg(test)]
+mod benchmarks;
 
 #[cfg(test)]
 mod fuzz_tests;

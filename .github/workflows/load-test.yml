@@ -114,6 +114,15 @@ jobs:
             echo "| Total Requests | $TOTAL | — | — |" >> $GITHUB_STEP_SUMMARY
           fi
 
+      - name: Alert on threshold breach
+        if: failure() && github.event_name != 'pull_request'
+        run: |
+          curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "text": ":red_circle: *Ajosave payout load test breached thresholds*\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>"
+            }'
+
       - name: Upload k6 results
         uses: actions/upload-artifact@v4
         if: always()

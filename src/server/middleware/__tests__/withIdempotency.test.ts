@@ -2,10 +2,15 @@ jest.mock("next/server", () => ({
   NextRequest: class {},
   NextResponse: { json: jest.fn((body, init) => ({ status: init?.status ?? 200, json: async () => body, clone: () => ({ json: async () => body }), headers: { set: jest.fn() } })) },
 }));
-jest.mock("@sentry/nextjs", () => ({ captureException: jest.fn() }));
+jest.mock("@sentry/nextjs", () => ({ captureException: jest.fn() }), { virtual: true });
 jest.mock("next-auth", () => ({ getServerSession: jest.fn() }));
 jest.mock("@/lib/correlation", () => ({ runWithCorrelationId: (_id: string, fn: Function) => fn() }));
-jest.mock("@/lib/logger", () => ({ child: () => ({ info: jest.fn(), error: jest.fn() }) }));
+jest.mock("@/lib/logger", () => ({ __esModule: true, default: { warn: jest.fn(), child: () => ({ info: jest.fn(), error: jest.fn() }) } }));
+jest.mock("@/lib/auth", () => ({ authOptions: {} }));
+jest.mock("next-auth/jwt", () => ({ getToken: jest.fn() }));
+jest.mock("@/lib/sessions", () => ({ isSessionRevoked: jest.fn(), hashToken: (s: string) => s }));
+jest.mock("@/lib/sanitize", () => ({ sanitizeBody: (b: unknown) => b }));
+jest.mock("@/lib/errors", () => ({ isAppError: () => false, internalError: jest.fn() }));
 
 const store = new Map<string, string>();
 
@@ -13,7 +18,12 @@ jest.mock("@/lib/redis", () => ({
   getRedis: jest.fn(() =>
     Promise.resolve({
       get: (key: string) => Promise.resolve(store.get(key) ?? null),
-      set: (key: string, value: string) => { store.set(key, value); return Promise.resolve("OK"); },
+      set: (key: string, value: string, opts?: { NX?: boolean }) => {
+        if (opts?.NX && store.has(key)) return Promise.resolve(null);
+        store.set(key, value);
+        return Promise.resolve("OK");
+      },
+      del: (key: string) => { store.delete(key); return Promise.resolve(1); },
     })
   ),
 }));
@@ -27,7 +37,10 @@ const makeReq = (idempotencyKey?: string) => ({
   headers: { get: (h: string) => (h === "x-idempotency-key" ? idempotencyKey ?? null : null) },
   url: "http://localhost/test",
   method: "POST",
+  clone: () => ({ text: async () => "{}" }),
 });
+
+const cachedKeys = () => [...store.keys()].filter((k) => !k.endsWith(":lock"));
 
 const makeHandler = (status = 200, body = { success: true }) =>
   jest.fn().mockResolvedValue(
@@ -45,9 +58,9 @@ describe("withIdempotency", () => {
   it("calls handler and caches response on first request", async () => {
     const handler = makeHandler(200, { success: true, data: { ref: "abc" } });
     const wrapped = withIdempotency(handler);
-    await wrapped(makeReq("key-1") as any);
+    await wrapped(makeReq("key-0001") as any);
     expect(handler).toHaveBeenCalledTimes(1);
-    expect(store.has("idempotency:key-1")).toBe(true);
+    expect(cachedKeys()).toHaveLength(1);
   });
 
   it("returns cached response on duplicate request without calling handler", async () => {
@@ -55,11 +68,11 @@ describe("withIdempotency", () => {
     const wrapped = withIdempotency(handler);
 
     // First request — populates cache
-    await wrapped(makeReq("key-2") as any);
+    await wrapped(makeReq("key-0002") as any);
     expect(handler).toHaveBeenCalledTimes(1);
 
     // Second request — should hit cache
-    const res = await wrapped(makeReq("key-2") as any);
+    const res = await wrapped(makeReq("key-0002") as any);
     expect(handler).toHaveBeenCalledTimes(1); // not called again
     expect(res.status).toBe(201);
   });
@@ -67,10 +80,9 @@ describe("withIdempotency", () => {
   it("different keys are cached independently", async () => {
     const handler = makeHandler();
     const wrapped = withIdempotency(handler);
-    await wrapped(makeReq("key-a") as any);
-    await wrapped(makeReq("key-b") as any);
+    await wrapped(makeReq("key-000a") as any);
+    await wrapped(makeReq("key-000b") as any);
     expect(handler).toHaveBeenCalledTimes(2);
-    expect(store.has("idempotency:key-a")).toBe(true);
-    expect(store.has("idempotency:key-b")).toBe(true);
+    expect(cachedKeys()).toHaveLength(2);
   });
 });
