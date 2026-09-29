@@ -2,13 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { createCircleSchema } from "@/types/schemas";
-import { createCircle, listOpenCircles, getCirclesByUser } from "@/server/services/circle.service";
+import { createCircle, listCircles, getCirclesByUser } from "@/server/services/circle.service";
 import { withErrorHandler, withRateLimit, withSanitizedBody } from "@/server/middleware";
 import {
   parseCursorParams,
   buildCursorResult,
 } from "@/lib/pagination";
-import type { ApiResponse, Circle } from "@/types";
+import type { ApiResponse, Circle, CircleFilters } from "@/types";
 import type { CursorPaginationResult } from "@/lib/pagination";
 
 interface PaginatedCircles {
@@ -16,32 +16,6 @@ interface PaginatedCircles {
   total: number;
   page: number;
   limit: number;
-}
-
-interface CircleFilters {
-  frequency?: Circle["cycleFrequency"];
-  minAmount?: number;
-  maxAmount?: number;
-  search?: string;
-  status?: Circle["status"];
-}
-
-function filterCircles(circles: Circle[], filters: CircleFilters): Circle[] {
-  const search = filters.search?.trim().toLowerCase();
-
-  return circles
-    .filter((circle) =>
-      filters.frequency === undefined || circle.cycleFrequency === filters.frequency
-    )
-    .filter((circle) =>
-      filters.minAmount === undefined || circle.contributionNgn >= filters.minAmount
-    )
-    .filter((circle) =>
-      filters.maxAmount === undefined || circle.contributionNgn <= filters.maxAmount
-    )
-    .filter((circle) => filters.status === undefined || circle.status === filters.status)
-    .filter((circle) => search === undefined || circle.name.toLowerCase().includes(search))
-    .sort((left, right) => left.id.localeCompare(right.id));
 }
 
 export const GET = withRateLimit(withErrorHandler(async (req: NextRequest) => {
@@ -70,6 +44,9 @@ export const GET = withRateLimit(withErrorHandler(async (req: NextRequest) => {
   const maxAmount = searchParams.get("maxAmount")
     ? parseInt(searchParams.get("maxAmount")!, 10)
     : undefined;
+  const maxMembersParam = searchParams.get("maxMembers")
+    ? parseInt(searchParams.get("maxMembers")!, 10)
+    : undefined;
   const search = searchParams.get("search") ?? undefined;
   const status = searchParams.get("status") as Circle["status"] | null;
 
@@ -77,10 +54,12 @@ export const GET = withRateLimit(withErrorHandler(async (req: NextRequest) => {
     frequency: frequency ?? undefined,
     minAmount,
     maxAmount,
+    maxMembers: maxMembersParam,
     search,
     status: status ?? undefined,
   };
-  const filteredCircles = filterCircles(await listOpenCircles(), filters);
+
+  const filteredCircles = await listCircles(filters);
 
   // ── Cursor-based pagination (the default listing strategy) ────────────────
   //

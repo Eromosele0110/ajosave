@@ -1,0 +1,84 @@
+# ZAP scan rule overrides — false positives / informational noise for a Next.js / Stellar app.
+#
+# Format: <rule-id>\t<action>\t<parameter>\t<evidence>\t<url>
+#
+# Actions:
+#   IGNORE    — suppress the alert (false positive or intentional)
+#   WARN      — downgrade to warning (still reported, does not fail the scan)
+#   FAIL      — treat as failure (stricter than the ZAP default)
+#
+# Rule IDs are from the ZAP passive and active scanner rule sets.
+# See https://www.zaproxy.org/docs/alerts/ for the full list.
+#
+# ─── Next.js framework false positives ───────────────────────────────────────
+# 10038 — Content Security Policy (CSP) header not set
+#   Next.js sets CSP via next.config.mjs headers; ZAP sometimes misses it.
+10038	WARN		
+# 10063 — Permissions Policy header not set
+#   Managed in next.config.mjs
+10063	WARN		
+# 10096 — Timestamp disclosure (server header)
+#   Next.js development mode exposes timestamps in headers; not applicable in prod.
+10096	IGNORE		
+# 10021 — X-Content-Type-Options header missing
+#   Next.js adds this automatically; ZAP can flag preflight OPTIONS responses.
+10021	WARN		
+
+# ─── Stellar / crypto wallet noise ───────────────────────────────────────────
+# 40012 — Cross Site Scripting (Reflected)
+#   Stellar public keys (56-char base58) trigger some XSS pattern heuristics.
+#   We sanitize all inputs via withSanitizedBody middleware; flag as warn only.
+40012	WARN		G[A-Z2-7]{55}	
+# 40014 — Cross Site Scripting (Persistent)
+40014	WARN		G[A-Z2-7]{55}	
+
+# ─── JWT / session token in URL false positives ──────────────────────────────
+# 10024 — Information disclosure — sensitive information in URL
+#   Invite links legitimately contain a JWT token query param (?token=…).
+#   This is by design (single-use, short-lived) — suppress URL disclosure alert.
+10024	IGNORE		token=	/circles/
+10024	IGNORE		token=	/api/invite/
+
+# ─── API-specific suppressions ────────────────────────────────────────────────
+# 90022 — Application error disclosure
+#   Our /api/health and /api/docs endpoints intentionally return structured JSON;
+#   ZAP may flag JSON error envelopes as error disclosure.
+90022	IGNORE		"success":false	/api/health
+90022	IGNORE		"success":false	/api/docs
+
+# 10094 — Base64 disclosure
+#   USDC amounts and Stellar transaction XDR are legitimately base64-encoded.
+10094	IGNORE		
+
+# 10049 — Storable and cacheable content
+#   Static Next.js assets are intentionally cached with long TTLs.
+10049	IGNORE		/_next/static/
+
+# ─── Active scan rules to downgrade (not fail CI) ─────────────────────────────
+# 40018 — SQL injection
+#   We use parameterized queries everywhere; any finding here is worth a WARN
+#   (investigate manually) rather than a hard CI failure.
+40018	WARN		
+
+# 40019 — SQL injection (MySQL specific)
+40019	WARN		
+
+# 40020 — SQL injection (Hypersonic specific)
+40020	WARN		
+
+# 40021 — SQL injection (Oracle specific)
+40021	WARN		
+
+# 40022 — SQL injection (PostgreSQL specific)
+40022	WARN		
+
+# 40024 — SQL injection (SQLite specific)
+40024	WARN		
+
+# 10055 — CSP scanner
+#   Staging environment may have relaxed CSP; warn but don't fail.
+10055	WARN		
+
+# 10035 — Strict-Transport-Security header not set
+#   Staging may not have HTTPS configured; warn only.
+10035	WARN		

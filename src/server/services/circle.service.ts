@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import type { Circle, Member, CircleStatus } from "@/types";
+import type { Circle, Member, CircleStatus, CircleFilters } from "@/types";
 import type { CreateCircleInput } from "@/types/schemas";
 import { transaction, query } from "@/lib/db";
 
@@ -37,6 +37,112 @@ export async function getCircleById(id: string): Promise<Circle | null> {
 
 export async function listOpenCircles(): Promise<Circle[]> {
   return [...circles.values()].filter((c) => c.status === "open");
+}
+
+/**
+ * Return circles that match the given filter criteria.
+ *
+ * Attempts a DB-backed query first so that filters are applied at the
+ * database level for efficiency.  Falls back to the in-memory store with
+ * client-side filtering when the DB is unavailable (dev / test environments).
+ *
+ * @param filters - Optional filter parameters. All fields are optional.
+ * @returns Matching circles ordered by creation date descending.
+ */
+export async function listCircles(filters: CircleFilters = {}): Promise<Circle[]> {
+  // ── DB-backed path ──────────────────────────────────────────────────────
+  try {
+    const conditions: string[] = ["deleted_at IS NULL"];
+    const params: unknown[] = [];
+    let idx = 1;
+
+    if (filters.status) {
+      conditions.push(`status = $${idx++}`);
+      params.push(filters.status);
+    } else {
+      // Default: only open circles (preserves existing public listing behaviour)
+      conditions.push(`status = 'open'`);
+    }
+
+    if (filters.frequency) {
+      conditions.push(`cycle_frequency = $${idx++}`);
+      params.push(filters.frequency);
+    }
+
+    if (filters.minAmount !== undefined) {
+      conditions.push(`contribution_ngn >= $${idx++}`);
+      params.push(filters.minAmount);
+    }
+
+    if (filters.maxAmount !== undefined) {
+      conditions.push(`contribution_ngn <= $${idx++}`);
+      params.push(filters.maxAmount);
+    }
+
+    if (filters.maxMembers !== undefined) {
+      conditions.push(`max_members = $${idx++}`);
+      params.push(filters.maxMembers);
+    }
+
+    if (filters.search) {
+      conditions.push(`name ILIKE $${idx++}`);
+      params.push(`%${filters.search}%`);
+    }
+
+    const sql = `
+      SELECT id, name, creator_id, contribution_usdc, contribution_ngn,
+             max_members, cycle_frequency, status, contract_id,
+             current_cycle, next_payout_at, created_at, updated_at
+      FROM circles
+      WHERE ${conditions.join(" AND ")}
+      ORDER BY created_at DESC
+    `;
+
+    const result = await query<{
+      id: string;
+      name: string;
+      creator_id: string;
+      contribution_usdc: string;
+      contribution_ngn: number;
+      max_members: number;
+      cycle_frequency: string;
+      status: string;
+      contract_id: string | null;
+      current_cycle: number;
+      next_payout_at: Date | null;
+      created_at: Date;
+      updated_at: Date;
+    }>(sql, params);
+
+    return result.rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      creatorId: row.creator_id,
+      contributionUsdc: row.contribution_usdc,
+      contributionNgn: row.contribution_ngn,
+      maxMembers: row.max_members,
+      cycleFrequency: row.cycle_frequency as Circle["cycleFrequency"],
+      status: row.status as CircleStatus,
+      contractId: row.contract_id ?? undefined,
+      currentCycle: row.current_cycle,
+      nextPayoutAt: row.next_payout_at ?? undefined,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
+  } catch {
+    console.warn("[circle.service] DB unavailable, falling back to in-memory filter");
+  }
+
+  // ── In-memory fallback ──────────────────────────────────────────────────
+  const search = filters.search?.trim().toLowerCase();
+  return [...circles.values()]
+    .filter((c) => (filters.status ? c.status === filters.status : c.status === "open"))
+    .filter((c) => !filters.frequency || c.cycleFrequency === filters.frequency)
+    .filter((c) => filters.minAmount === undefined || c.contributionNgn >= filters.minAmount)
+    .filter((c) => filters.maxAmount === undefined || c.contributionNgn <= filters.maxAmount)
+    .filter((c) => filters.maxMembers === undefined || c.maxMembers === filters.maxMembers)
+    .filter((c) => !search || c.name.toLowerCase().includes(search))
+    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 }
 
 export async function getCirclesByUser(userId: string): Promise<Circle[]> {

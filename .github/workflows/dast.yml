@@ -1,0 +1,123 @@
+name: DAST — Authenticated Staging Scan (OWASP ZAP)
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 4 * * 1" # Weekly on Monday at 04:00 UTC
+
+permissions:
+  contents: read
+  security-events: write # upload SARIF to GitHub Security tab
+  issues: write           # open/update issues on high/critical findings
+
+jobs:
+  zap-dast:
+    name: OWASP ZAP Authenticated DAST
+    runs-on: ubuntu-latest
+    # Only target staging — never run against production
+    environment: staging
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Obtain a session cookie / JWT for the test account ─────────────────
+      # The ZAP authenticated scan needs a live session token.  We call the
+      # staging OTP-less test-auth endpoint (available only in staging) to get
+      # a NextAuth session cookie, then export it so the ZAP context can use it.
+      - name: Authenticate against staging and capture session
+        id: auth
+        run: |
+          RESPONSE=$(curl -s -c /tmp/cookies.txt -X POST \
+            "${{ vars.STAGING_URL }}/api/v1/auth/test-session" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "phone": "${{ secrets.DAST_TEST_PHONE }}",
+              "secret": "${{ secrets.DAST_TEST_SECRET }}"
+            }')
+
+          echo "auth_response=${RESPONSE}" >> "$GITHUB_OUTPUT"
+
+          # Extract the session token value for the ZAP Authorization header
+          SESSION_TOKEN=$(echo "$RESPONSE" | jq -r '.data.token // empty')
+          if [ -z "$SESSION_TOKEN" ]; then
+            echo "::warning::Could not extract session token — ZAP will run unauthenticated"
+          fi
+          echo "session_token=${SESSION_TOKEN}" >> "$GITHUB_OUTPUT"
+
+      # ── Prepare ZAP target URL list ────────────────────────────────────────
+      - name: Write ZAP target URLs file
+        run: |
+          cat > /tmp/zap-targets.txt <<EOF
+          ${{ vars.STAGING_URL }}/api/v1/circles
+          ${{ vars.STAGING_URL }}/api/v1/auth/send-otp
+          ${{ vars.STAGING_URL }}/dashboard
+          EOF
+
+      # ── Full authenticated scan ────────────────────────────────────────────
+      - name: Run ZAP authenticated full scan
+        uses: zaproxy/action-full-scan@v0.11.0
+        with:
+          target: "${{ vars.STAGING_URL }}"
+          rules_file_name: ".github/zap/rules.tsv"
+          # Pass the session token as a replacement header so every request
+          # is authenticated.  ZAP replaces the literal string in all outbound
+          # requests during the scan.
+          cmd_options: >-
+            -config globalexcludeurl.url_list.url(0).regex='.*/logout.*'
+            -config replacer.full_list(0).description=AuthHeader
+            -config replacer.full_list(0).enabled=true
+            -config replacer.full_list(0).matchtype=REQ_HEADER
+            -config replacer.full_list(0).matchstr=Authorization
+            -config "replacer.full_list(0).replacement=Bearer ${{ steps.auth.outputs.session_token }}"
+          # Fail the job if ZAP finds HIGH or CRITICAL alerts
+          fail_action: true
+          allow_issue_writing: false
+          artifact_name: zap-scan-report
+
+      # ── Upload scan reports as workflow artifacts ──────────────────────────
+      - name: Upload ZAP HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-report-${{ github.run_id }}
+          path: |
+            report_html.html
+            report_json.json
+            report_md.md
+          retention-days: 30
+
+      # ── Upload SARIF to GitHub Security tab ───────────────────────────────
+      - name: Upload ZAP SARIF to Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: report_sarif.sarif
+          category: zap-dast
+        continue-on-error: true # SARIF file may not exist if ZAP crashed
+
+      # ── Comment on failure ────────────────────────────────────────────────
+      - name: Create issue on high/critical findings
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.create({
+              owner,
+              repo,
+              title: `🚨 DAST: High/Critical security findings (run ${context.runId})`,
+              body: [
+                '## OWASP ZAP found HIGH or CRITICAL vulnerabilities',
+                '',
+                `**Workflow run:** ${runUrl}`,
+                `**Branch:** ${context.ref}`,
+                `**Triggered by:** ${context.eventName}`,
+                '',
+                'Download the `zap-report-*` artifact from the workflow run for full details.',
+                '',
+                '**Action required:** Review and remediate all HIGH/CRITICAL findings before next release.',
+              ].join('\n'),
+              labels: ['security', 'dast', 'high-priority'],
+            });
