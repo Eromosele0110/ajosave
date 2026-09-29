@@ -114,7 +114,7 @@ The Ajo contract (`contracts/ajo/`) handles the full circle lifecycle:
 ### Prerequisites
 
 - Node.js ≥ 20, npm ≥ 10
-- Docker (or a local PostgreSQL 15+ and Redis 7+) — see [docs/migrations.md](docs/migrations.md) for the database setup
+- Docker (or a local PostgreSQL 15+ and Redis 7+) — see [docs/LOCAL_DATABASE.md](docs/LOCAL_DATABASE.md) for the database setup
 - Rust + Cargo, plus the `wasm32-unknown-unknown` target (for contract work): `rustup target add wasm32-unknown-unknown`
 - [Stellar CLI](https://developers.stellar.org/docs/tools/developer-tools/cli/stellar-cli)
 
