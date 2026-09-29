@@ -114,18 +114,24 @@ The Ajo contract (`contracts/ajo/`) handles the full circle lifecycle:
 ### Prerequisites
 
 - Node.js ≥ 20, npm ≥ 10
-- Rust + `wasm32-unknown-unknown` (for contract work)
+- Docker (or a local PostgreSQL 15+ and Redis 7+) — see [docs/migrations.md](docs/migrations.md) for the database setup
+- Rust + Cargo, plus the `wasm32-unknown-unknown` target (for contract work): `rustup target add wasm32-unknown-unknown`
 - [Stellar CLI](https://developers.stellar.org/docs/tools/developer-tools/cli/stellar-cli)
 
 ### Installation
 
 ```bash
 git clone https://github.com/joekeyz8/ajosave.git
-cd stellar
+cd ajosave
 npm install
 cp .env.example .env.local
-# Fill in environment variables
+# Fill in environment variables (see .env.example for descriptions)
+
+# Start Postgres + Redis locally
+docker-compose up -d
+
 npm run dev
+# → http://localhost:3000
 ```
 
 ### Smart Contract
