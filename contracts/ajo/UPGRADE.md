@@ -56,6 +56,20 @@ stellar contract invoke \
 
 Confirm the circle state is intact and the new logic is active.
 
+## Verifying a WASM artifact
+
+Every GitHub release runs `.github/workflows/contract-wasm-release.yml`,
+which rebuilds `ajo.wasm` and `certificate.wasm` from source and publishes
+them on the release alongside a `SHA256SUMS.txt`. Before trusting a
+`<NEW_WASM_HASH>` used in step 3 above, rebuild locally and compare:
+
+```bash
+npm run contract:build
+sha256sum contracts/target/wasm32-unknown-unknown/release/*.wasm
+# Compare against the release's SHA256SUMS.txt and against the hash
+# printed by `stellar contract upload` in step 2.
+```
+
 ## Notes
 
 - Only the `admin` address set during `initialize` can call `upgrade`.
