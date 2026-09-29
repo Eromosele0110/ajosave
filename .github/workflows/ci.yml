@@ -78,6 +78,67 @@ jobs:
       - run: npm ci
       - run: npm run build
 
+  docs-lint:
+    name: Documentation Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify required docs exist
+        run: |
+          missing=()
+          for doc in \
+            docs/contract-auditor-guide.md \
+            docs/privacy-retention-guide.md \
+            docs/user-fee-risk-help.md \
+            docs/mainnet-disaster-recovery.md; do
+            if [ ! -f "$doc" ]; then
+              missing+=("$doc")
+            fi
+          done
+          if [ ${#missing[@]} -ne 0 ]; then
+            echo "ERROR: Missing required documentation files:"
+            printf '  %s\n' "${missing[@]}"
+            exit 1
+          fi
+          echo "All required documentation files present."
+      - name: Check docs are non-empty
+        run: |
+          for doc in \
+            docs/contract-auditor-guide.md \
+            docs/privacy-retention-guide.md \
+            docs/user-fee-risk-help.md \
+            docs/mainnet-disaster-recovery.md; do
+            size=$(wc -c < "$doc")
+            if [ "$size" -lt 500 ]; then
+              echo "ERROR: $doc is suspiciously small ($size bytes) — may be a stub"
+              exit 1
+            fi
+          done
+          echo "All documentation files have sufficient content."
+      - name: Check docs contain required sections
+        run: |
+          check_section() {
+            local file="$1"
+            local section="$2"
+            if ! grep -q "$section" "$file"; then
+              echo "ERROR: $file is missing required section: $section"
+              exit 1
+            fi
+          }
+          check_section docs/contract-auditor-guide.md "## Trust Model"
+          check_section docs/contract-auditor-guide.md "## Edge Cases"
+          check_section docs/contract-auditor-guide.md "## CI Checks"
+          check_section docs/privacy-retention-guide.md "## Retention Schedules"
+          check_section docs/privacy-retention-guide.md "## PII Encryption"
+          check_section docs/privacy-retention-guide.md "## Right to Erasure"
+          check_section docs/user-fee-risk-help.md "## What Fees Will I Pay"
+          check_section docs/user-fee-risk-help.md "## What Risks Should I Know"
+          check_section docs/mainnet-disaster-recovery.md "## Disaster Categories"
+          check_section docs/mainnet-disaster-recovery.md "DR-1"
+          check_section docs/mainnet-disaster-recovery.md "DR-2"
+          check_section docs/mainnet-disaster-recovery.md "Post-Recovery Checklist"
+          echo "All required sections present."
+
   contract-cost-benchmarks:
     name: Soroban Cost Benchmarks
     runs-on: ubuntu-latest
