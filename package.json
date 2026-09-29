@@ -34,6 +34,7 @@
     "contract:build": "cd contracts && stellar contract build",
     "contract:test": "cd contracts && cargo test",
     "contract:deploy": "ts-node scripts/deploy-contract.ts",
+    "contract:verify": "ts-node scripts/verify-contract.ts",
     "prepare": "husky"
   },
   "dependencies": {

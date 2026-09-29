@@ -35,6 +35,22 @@ jobs:
       - uses: codecov/codecov-action@v4
         with: { token: "${{ secrets.CODECOV_TOKEN }}", fail_ci_if_error: false }
 
+  contract:
+    name: Soroban Contract Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with: { targets: wasm32-unknown-unknown }
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: contracts }
+      - run: npm run contract:test
+      - name: Install Stellar CLI
+        run: |
+          curl -sSL https://github.com/stellar/stellar-cli/releases/latest/download/stellar-cli-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz -C /usr/local/bin
+      - run: npm run contract:build
+
   build:
     name: Next.js Build
     runs-on: ubuntu-latest
