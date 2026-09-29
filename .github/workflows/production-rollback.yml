@@ -1,0 +1,145 @@
+name: Rollback Production
+
+# Rolls production back to a prior successfully-deployed commit by
+# redeploying that commit's build to Vercel with --prod. Uses the GitHub
+# Deployments API (populated by production-deploy.yml) to find the target
+# when one isn't given explicitly, so "roll back to what was live before"
+# doesn't require anyone to remember a SHA.
+#
+# Gated by the same "production" GitHub Environment (and its required
+# reviewers, once configured — see docs/DEPLOYMENT_APPROVAL_ROLLBACK.md) as
+# a forward deploy, since a rollback is itself a production deployment.
+
+on:
+  workflow_dispatch:
+    inputs:
+      to_sha:
+        description: "Commit SHA to roll back to. Leave blank to use the second-most-recent successful production deployment (i.e. the one before the current one)."
+        required: false
+        default: ""
+
+jobs:
+  resolve-target:
+    name: Resolve rollback target
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - name: Resolve target SHA
+        id: resolve
+        uses: actions/github-script@v7
+        env:
+          INPUT_SHA: ${{ inputs.to_sha }}
+        with:
+          script: |
+            const input = process.env.INPUT_SHA.trim();
+            if (input) {
+              core.setOutput('sha', input);
+              return;
+            }
+            const deployments = await github.rest.repos.listDeployments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              environment: 'production',
+              per_page: 20,
+            });
+            const successful = [];
+            for (const d of deployments.data) {
+              const statuses = await github.rest.repos.listDeploymentStatuses({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                deployment_id: d.id,
+              });
+              if (statuses.data.some(s => s.state === 'success')) {
+                successful.push(d);
+              }
+            }
+            if (successful.length < 2) {
+              core.setFailed('Could not find a prior successful production deployment to roll back to. Pass to_sha explicitly.');
+              return;
+            }
+            // [0] is the current/most-recent deployment; [1] is the one before it.
+            core.setOutput('sha', successful[1].sha);
+
+  rollback:
+    name: Redeploy previous release
+    needs: resolve-target
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-target.outputs.sha }}
+
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+
+      - run: npm ci
+
+      - name: Build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_APP_URL: ${{ vars.PRODUCTION_URL }}
+          NEXT_PUBLIC_APP_NAME: Ajosave
+          NEXTAUTH_URL: ${{ vars.PRODUCTION_URL }}
+          NEXTAUTH_SECRET: ${{ secrets.NEXTAUTH_SECRET }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          STELLAR_NETWORK: ${{ vars.STELLAR_NETWORK || 'mainnet' }}
+          STELLAR_HORIZON_URL: ${{ vars.STELLAR_HORIZON_URL }}
+          STELLAR_NETWORK_PASSPHRASE: ${{ vars.STELLAR_NETWORK_PASSPHRASE }}
+          STELLAR_AJO_CONTRACT_ID: ${{ secrets.STELLAR_CONTRACT_ID }}
+          STELLAR_SERVER_SECRET_KEY: ${{ secrets.STELLAR_SERVER_SECRET_KEY }}
+          STELLAR_SOROBAN_RPC_URL: ${{ vars.STELLAR_SOROBAN_RPC_URL }}
+          USDC_ISSUER: ${{ vars.USDC_ISSUER }}
+          USDC_ASSET_CODE: USDC
+          PAYSTACK_SECRET_KEY: ${{ secrets.PAYSTACK_SECRET_KEY }}
+          TERMII_API_KEY: ${{ secrets.TERMII_API_KEY }}
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          NEXT_PUBLIC_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+
+      - name: Deploy to Vercel (Production)
+        id: vercel
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          vercel-args: "--prebuilt --prod"
+
+      - name: Record rollback deployment
+        uses: actions/github-script@v7
+        env:
+          DEPLOY_URL: ${{ steps.vercel.outputs.preview-url }}
+          ROLLBACK_SHA: ${{ needs.resolve-target.outputs.sha }}
+        with:
+          script: |
+            const deployment = await github.rest.repos.createDeployment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: process.env.ROLLBACK_SHA,
+              environment: 'production',
+              auto_merge: false,
+              required_contexts: [],
+              description: `Rollback via workflow run ${context.runId}`,
+            });
+            if (deployment.data && deployment.data.id) {
+              await github.rest.repos.createDeploymentStatus({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                deployment_id: deployment.data.id,
+                state: 'success',
+                environment: 'production',
+                environment_url: process.env.DEPLOY_URL || undefined,
+                description: `Rolled back production to ${process.env.ROLLBACK_SHA}`,
+              });
+            }
+
+      - name: Summary
+        run: |
+          echo "### Production Rollback" >> $GITHUB_STEP_SUMMARY
+          echo "Rolled back to \`${{ needs.resolve-target.outputs.sha }}\`." >> $GITHUB_STEP_SUMMARY
