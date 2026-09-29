@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- CSRF: cookie-authenticated `POST`/`PUT`/`PATCH`/`DELETE` requests to `/api/*` must now come from an allowed origin (`Origin`, `Referer` or `Sec-Fetch-Site`), else `403`; bearer-token, cookie-less, webhook and NextAuth built-in requests are unaffected (#104)
+- SSRF: outbound requests to Soroban RPC, the KYC provider and the faucet go through `safeFetch`, which blocks private/loopback/link-local/metadata destinations, non-HTTPS schemes, embedded credentials and redirects (#105)
+- OTP: per-phone resend cooldown (60 s), per-phone daily cap (10) and per-IP hourly cap (20) on send, `429` with `Retry-After`; OTPs now use `crypto.randomInt` and constant-time comparison (#109)
+- Exports: both CSV exports now stream through the hardened helper (no-store headers, formula-injection guard, row cap) and deleted accounts export nothing; account deletion also revokes sessions and purges phone-keyed Redis state (#110)
+
 ## [0.1.0] - 2026-04-24
 
 ### Added

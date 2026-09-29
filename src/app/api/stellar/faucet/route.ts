@@ -12,11 +12,13 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { sendUsdcPayment } from "@/lib/stellar";
 import { serverConfig } from "@/server/config";
+import { outboundPolicy, safeFetch } from "@/lib/ssrf";
 import { withRateLimit, withErrorHandler } from "@/server/middleware";
 import type { ApiResponse } from "@/types";
 
 const USDC_FAUCET_AMOUNT = "100"; // USDC to send from server wallet
 const FRIENDBOT_URL = "https://friendbot.stellar.org";
+const FRIENDBOT_POLICY = outboundPolicy({ allowedHosts: ["friendbot.stellar.org"] });
 
 async function handler(req: NextRequest): Promise<NextResponse> {
   if (serverConfig.stellar.network !== "testnet") {
@@ -43,7 +45,11 @@ async function handler(req: NextRequest): Promise<NextResponse> {
   }
 
   // Step 1 — fund XLM via Friendbot (creates account + adds XLM)
-  const friendbotRes = await fetch(`${FRIENDBOT_URL}?addr=${encodeURIComponent(publicKey)}`);
+  const friendbotRes = await safeFetch(
+    `${FRIENDBOT_URL}?addr=${encodeURIComponent(publicKey)}`,
+    {},
+    FRIENDBOT_POLICY
+  );
   if (!friendbotRes.ok && friendbotRes.status !== 400) {
     // 400 from Friendbot means account already funded — that's fine
     const text = await friendbotRes.text();

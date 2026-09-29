@@ -1,22 +1,30 @@
 import { NextRequest, NextResponse } from "next/server";
+import { checkCsrf, resolveAllowedOrigins } from "@/lib/csrf";
 
 export function middleware(request: NextRequest) {
   const origin = request.headers.get("origin");
 
-  const configuredOrigins = process.env.ALLOWED_ORIGINS
-    ? process.env.ALLOWED_ORIGINS.split(",")
-    : [];
+  const allowedOrigins = resolveAllowedOrigins();
 
-  const allowedOrigins = [
-    ...configuredOrigins,
-    process.env.NEXT_PUBLIC_APP_URL,
-    process.env.NEXTAUTH_URL,
-    "http://localhost:3000",
-    "https://ajosave.app",
-    "https://www.ajosave.app",
-  ]
-    .filter(Boolean)
-    .map((o) => o!.trim().replace(/\/$/, ""));
+  // CSRF: cookie-authenticated mutations must come from an allowed origin (#104).
+  if (request.nextUrl.pathname.startsWith("/api/")) {
+    const csrf = checkCsrf({
+      method: request.method,
+      pathname: request.nextUrl.pathname,
+      headers: request.headers,
+      requestOrigin: request.nextUrl.origin,
+      allowedOrigins,
+    });
+    if (!csrf.ok) {
+      console.warn(
+        `[csrf] blocked ${request.method} ${request.nextUrl.pathname}: ${csrf.reason}`
+      );
+      return NextResponse.json(
+        { success: false, error: "CSRF validation failed" },
+        { status: 403 }
+      );
+    }
+  }
 
   // Handle API versioning redirects
   if (request.nextUrl.pathname.startsWith("/api/") && !request.nextUrl.pathname.startsWith("/api/v1/")) {

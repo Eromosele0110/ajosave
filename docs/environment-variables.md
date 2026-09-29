@@ -114,7 +114,8 @@ start / the feature will not work. **Optional** = has a safe default.
 |---|---|---|---|
 | `PII_ENCRYPTION_KEY` | **Required in prod** | `""` | Symmetric key used to encrypt PII at rest (see `src/lib/encryption.ts`). |
 | `PII_HMAC_KEY` | **Required in prod** | `""` | HMAC key used for deterministic PII lookups (blind indexing). |
-| `ALLOWED_ORIGINS` | Optional | `""` | Comma-separated list of origins allowed by CORS middleware. |
+| `ALLOWED_ORIGINS` | Optional | `""` | Comma-separated list of origins allowed by CORS middleware and accepted as the source of cookie-authenticated mutations (CSRF check). See [security-controls.md](./security-controls.md). |
+| `OUTBOUND_ALLOW_PRIVATE_NETWORK` | Optional | `""` | Set to `true` in production to let server-side requests (Soroban RPC, KYC, faucet) reach private/loopback addresses and plain `http:`. Leave unset unless you run a private RPC. Always allowed outside production. |
 
 ## Observability
 

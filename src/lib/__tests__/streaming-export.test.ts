@@ -67,3 +67,12 @@ it("sets no-store attachment headers", () => {
   expect(h["Cache-Control"]).toContain("no-store");
   expect(h["Content-Disposition"]).toBe('attachment; filename="contributions_2026.csv"');
 });
+
+it("forbids every kind of caching and sandboxes the download", () => {
+  const h = exportResponseHeaders("x");
+  expect(h["Cache-Control"]).toBe("no-store, private");
+  expect(h.Pragma).toBe("no-cache");
+  expect(h.Expires).toBe("0");
+  expect(h["X-Content-Type-Options"]).toBe("nosniff");
+  expect(h["Content-Security-Policy"]).toContain("sandbox");
+});

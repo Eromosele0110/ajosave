@@ -15,8 +15,10 @@
  */
 import { createHmac } from "crypto";
 import { query } from "./db";
+import { outboundPolicy, safeFetch } from "./ssrf";
 
 const BASE_URL = "https://testapi.smileidentity.com/v1";
+const KYC_POLICY = outboundPolicy({ allowedHosts: ["testapi.smileidentity.com"] });
 
 export type KycStatus = "none" | "pending" | "approved" | "rejected";
 
@@ -26,7 +28,7 @@ export async function initiateKyc(userId: string): Promise<{ token: string }> {
   const apiKey = requireEnv("SMILE_API_KEY");
   const callbackUrl = requireEnv("SMILE_CALLBACK_URL");
 
-  const res = await fetch(`${BASE_URL}/token`, {
+  const res = await safeFetch(`${BASE_URL}/token`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -36,7 +38,7 @@ export async function initiateKyc(userId: string): Promise<{ token: string }> {
       user_id: userId,
       product: "ekyc_smartselfie",
     }),
-  });
+  }, KYC_POLICY);
 
   if (!res.ok) {
     const text = await res.text();

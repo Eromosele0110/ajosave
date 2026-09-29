@@ -18,7 +18,7 @@ async function fetchLiveRate(currency: string): Promise<number> {
   // Use ExchangeRate-API (free tier, no key needed for basic endpoint)
   const { data } = await axios.get(
     "https://open.er-api.com/v6/latest/USD",
-    { timeout: 5000 }
+    { timeout: 5000, maxRedirects: 0 }
   );
   const rate: number = data.rates?.[currency];
   if (!rate) throw new Error(`${currency} rate missing from FX response`);

@@ -88,3 +88,51 @@ describe("CORS Policy Middleware", () => {
     expect(res.headers.get("Access-Control-Allow-Origin")).toBeNull();
   });
 });
+
+describe("CSRF protection in middleware", () => {
+  function mutation(method: string, headersInit: Record<string, string>): NextRequest {
+    return new NextRequest(new URL("http://localhost:3000/api/v1/circles"), {
+      method,
+      headers: new Headers(headersInit),
+    });
+  }
+
+  it("rejects a cookie-authenticated POST from an unlisted origin with 403", async () => {
+    const res = middleware(
+      mutation("POST", { cookie: "session=abc", origin: "https://malicious-site.com" })
+    );
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toBe("CSRF validation failed");
+  });
+
+  it("rejects a cookie-authenticated POST that carries no origin information", () => {
+    const res = middleware(mutation("DELETE", { cookie: "session=abc" }));
+    expect(res.status).toBe(403);
+  });
+
+  it("allows a cookie-authenticated POST from an allowed origin", () => {
+    const res = middleware(
+      mutation("POST", { cookie: "session=abc", origin: "https://ajosave.app" })
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("https://ajosave.app");
+  });
+
+  it("allows a cookie-authenticated POST whose origin is the request's own origin", () => {
+    const res = middleware(
+      mutation("POST", { cookie: "session=abc", origin: "http://localhost:3000" })
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("does not block bearer-token requests", () => {
+    const res = middleware(
+      mutation("POST", {
+        cookie: "session=abc",
+        authorization: "Bearer t",
+        origin: "https://ajosave.app",
+      })
+    );
+    expect(res.status).toBe(200);
+  });
+});

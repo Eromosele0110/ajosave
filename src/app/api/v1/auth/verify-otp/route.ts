@@ -3,6 +3,7 @@ import { withErrorHandler, withRateLimit } from "@/server/middleware";
 import { verifyOtpSchema } from "@/types/schemas";
 import { getRedis } from "@/lib/redis";
 import { getLockoutStatus, recordFailure, resetLockout } from "@/lib/lockout";
+import { otpMatches } from "@/lib/otp-code";
 import { query } from "@/lib/db";
 import type { ApiResponse } from "@/types";
 
@@ -113,7 +114,7 @@ export const POST = withRateLimit(
     const redis = await getRedis();
     const storedOtp = await redis.get(`otp:${phone}`);
 
-    if (!storedOtp || storedOtp !== otp) {
+    if (!otpMatches(storedOtp, otp)) {
       // Record failure and get updated status
       const updatedStatus = await recordFailure(phone);
 

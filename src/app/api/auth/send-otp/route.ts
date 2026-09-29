@@ -5,6 +5,7 @@ import { sendOtpSchema } from "@/types/schemas";
 import type { ApiResponse } from "@/types";
 import { getRedis } from "@/lib/redis";
 import { getLockoutStatus } from "@/lib/lockout";
+import { checkOtpSendAllowed, getClientIp, releaseOtpSendCooldown } from "@/lib/otp-abuse";
 
 interface SendOtpResponse {
   message: string;
@@ -85,7 +86,22 @@ export const POST = withRateLimit(
       );
     }
 
-    const otp = await sendOtp(phone);
+    const sendDecision = await checkOtpSendAllowed(phone, getClientIp(req.headers));
+    if (!sendDecision.allowed) {
+      return NextResponse.json<ApiResponse<never>>(
+        { success: false, error: sendDecision.message },
+        { status: 429, headers: { "Retry-After": String(sendDecision.retryAfterSeconds) } }
+      );
+    }
+
+    let otp: string;
+    try {
+      otp = await sendOtp(phone);
+    } catch (err) {
+      // The code never reached the user: free the cooldown so they can retry at once.
+      await releaseOtpSendCooldown(phone);
+      throw err;
+    }
 
     // Store OTP in Redis with 10-minute expiry
     const redis = await getRedis();
