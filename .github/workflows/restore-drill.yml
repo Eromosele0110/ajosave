@@ -160,6 +160,11 @@ jobs:
         if: failure()
         run: |
           echo "::error::Backup restore drill FAILED — the latest backup at '${{ steps.resolve_key.outputs.s3_key }}' did not restore cleanly. Investigate immediately."
+          curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"text\": \":red_circle: *Ajosave backup restore drill FAILED*\nBackup key: \`${{ steps.resolve_key.outputs.s3_key }}\`\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>\"
+            }"
 
       - name: Cleanup
         if: always()
