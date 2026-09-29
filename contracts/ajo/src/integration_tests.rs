@@ -449,6 +449,8 @@ let (cycle, max, _, completed, _) = client.get_state();
         let f = setup_fixture(2);
         let new_wasm_hash = BytesN::from_array(&f.env, &[1u8; 32]);
 
+        f.client.propose_upgrade(&new_wasm_hash);
+        f.env.ledger().with_mut(|l| l.timestamp += 172_800);
         f.client.upgrade(&new_wasm_hash);
 
         let upgraded_sym = soroban_sdk::Symbol::new(&f.env, "upgraded");
@@ -498,6 +500,63 @@ let (cycle, max, _, completed, _) = client.get_state();
         f.client.upgrade(&new_wasm_hash);
     }
 
+    /// upgrade governance (#55): upgrade() rejects a call with no prior
+    /// propose_upgrade().
+    #[test]
+    #[should_panic(expected = "no pending upgrade proposed")]
+    fn test_upgrade_without_proposal_panics() {
+        use soroban_sdk::BytesN;
+
+        let f = setup_fixture(2);
+        let new_wasm_hash = BytesN::from_array(&f.env, &[4u8; 32]);
+        f.client.upgrade(&new_wasm_hash);
+    }
+
+    /// upgrade governance (#55): upgrade() rejects execution before the
+    /// timelock set by propose_upgrade() has elapsed.
+    #[test]
+    #[should_panic(expected = "upgrade timelock has not elapsed")]
+    fn test_upgrade_before_timelock_panics() {
+        use soroban_sdk::BytesN;
+
+        let f = setup_fixture(2);
+        let new_wasm_hash = BytesN::from_array(&f.env, &[5u8; 32]);
+        f.client.propose_upgrade(&new_wasm_hash);
+        // Timelock is 48h; advance by only 1 hour.
+        f.env.ledger().with_mut(|l| l.timestamp += 3_600);
+        f.client.upgrade(&new_wasm_hash);
+    }
+
+    /// upgrade governance (#55): upgrade() rejects a hash that does not
+    /// match the pending proposal.
+    #[test]
+    #[should_panic(expected = "does not match the pending upgrade proposal")]
+    fn test_upgrade_hash_mismatch_panics() {
+        use soroban_sdk::BytesN;
+
+        let f = setup_fixture(2);
+        let proposed_hash = BytesN::from_array(&f.env, &[6u8; 32]);
+        let other_hash = BytesN::from_array(&f.env, &[7u8; 32]);
+        f.client.propose_upgrade(&proposed_hash);
+        f.env.ledger().with_mut(|l| l.timestamp += 172_800);
+        f.client.upgrade(&other_hash);
+    }
+
+    /// upgrade governance (#55): cancel_upgrade() clears the pending
+    /// proposal so a subsequent upgrade() call is rejected again.
+    #[test]
+    #[should_panic(expected = "no pending upgrade proposed")]
+    fn test_cancel_upgrade_clears_proposal() {
+        use soroban_sdk::BytesN;
+
+        let f = setup_fixture(2);
+        let new_wasm_hash = BytesN::from_array(&f.env, &[8u8; 32]);
+        f.client.propose_upgrade(&new_wasm_hash);
+        f.client.cancel_upgrade();
+        f.env.ledger().with_mut(|l| l.timestamp += 172_800);
+        f.client.upgrade(&new_wasm_hash);
+    }
+
     /// upgrade: state is preserved after upgrade call
     #[test]
     fn test_upgrade_preserves_state() {
@@ -511,6 +570,8 @@ let (cycle, max, _, completed, _) = client.get_state();
         let (cycle_before, max_before, _, completed_before, _) = f.client.get_state();
 
         let new_wasm_hash = BytesN::from_array(&f.env, &[3u8; 32]);
+        f.client.propose_upgrade(&new_wasm_hash);
+        f.env.ledger().with_mut(|l| l.timestamp += 172_800);
         f.client.upgrade(&new_wasm_hash);
 
         let (cycle_after, max_after, _, completed_after, _) = f.client.get_state();
