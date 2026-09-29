@@ -109,6 +109,15 @@ impl AjoContract {
 
         admin.require_auth();
 
+        // ─── Token issuer safeguard ────────────────────────────────────────────
+        // `token` is admin-supplied and, once set here, can never be changed for
+        // the lifetime of this circle (there is no `set_token`/update path).
+        // Probe it with a standard SEP-41 read before persisting any state, so a
+        // bad or non-token address fails atomically in this same call instead of
+        // silently bricking the circle the first time `join`/`contribute`/`payout`
+        // tries to move funds through it.
+        token::Client::new(&env, &token).decimals();
+
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Token, &token);
         env.storage().instance().set(&DataKey::ContributionAmount, &contribution_amount);
@@ -550,6 +559,13 @@ impl AjoContract {
         env.storage().instance().get(&DataKey::Members).unwrap_or(vec![&env])
     }
 
+    /// Returns the token (and therefore issuer) this circle is configured to
+    /// use, so integrators can verify a deployed circle's asset before
+    /// trusting it with funds instead of relying solely on client-side config.
+    pub fn get_token(env: Env) -> Address {
+        env.storage().instance().get(&DataKey::Token).expect("not initialized")
+    }
+
     pub fn get_payout_order(env: Env) -> Vec<u32> {
         env.storage().instance().get(&DataKey::PayoutOrder).unwrap_or(vec![&env])
     }
@@ -895,6 +911,88 @@ mod tests {
         env.mock_all_auths();
         let (_, _, _, _, client) = setup(&env);
         client.accept_admin();
+    }
+
+    // ─── Event schema compatibility (issue #59) ──────────────────────────────
+    //
+    // Off-chain consumers (e.g. src/server/services/event-indexer.service.ts)
+    // decode published events positionally by topic. These tests lock the
+    // exact topic name + tuple shape of the events that feed that indexer,
+    // so a future change that reorders or retypes a field is caught here
+    // instead of silently breaking off-chain consumers.
+
+    #[test]
+    fn test_initialized_event_schema() {
+        use soroban_sdk::{testutils::Events, TryFromVal};
+
+        let env = Env::default();
+        env.mock_all_auths();
+        let (admin, _, _, _, _) = setup(&env);
+
+        let sym = Symbol::new(&env, "initialized");
+        let found = env.events().all().iter().any(|(_, topics, data)| {
+            if topics.len() != 1 { return false; }
+            let Ok(t) = Symbol::try_from_val(&env, &topics.get(0).unwrap()) else { return false; };
+            if t != sym { return false; }
+            let Ok((a, max_members, amount)) = <(Address, u32, i128)>::try_from_val(&env, data) else { return false; };
+            a == admin && max_members == 3 && amount == 100_000_000
+        });
+        assert!(
+            found,
+            "'initialized' event schema changed: expected (admin: Address, max_members: u32, contribution_amount: i128)"
+        );
+    }
+
+    #[test]
+    fn test_member_joined_event_schema() {
+        use soroban_sdk::{testutils::Events, TryFromVal};
+
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_, members, _, _, client) = setup(&env);
+        let member = members.get(0).unwrap();
+        client.join(&member);
+
+        let sym = Symbol::new(&env, "member_joined");
+        let found = env.events().all().iter().any(|(_, topics, data)| {
+            if topics.len() != 1 { return false; }
+            let Ok(t) = Symbol::try_from_val(&env, &topics.get(0).unwrap()) else { return false; };
+            if t != sym { return false; }
+            let Ok((m, amount)) = <(Address, i128)>::try_from_val(&env, data) else { return false; };
+            m == member && amount == 100_000_000
+        });
+        assert!(
+            found,
+            "'member_joined' event schema changed: expected (member: Address, amount: i128)"
+        );
+    }
+
+    #[test]
+    fn test_contribution_made_event_schema() {
+        use soroban_sdk::{testutils::Events, TryFromVal};
+
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_, members, _, _, client) = setup(&env);
+        for m in members.iter() { client.join(m); }
+
+        let member = members.get(0).unwrap();
+        env.ledger().with_mut(|l| l.timestamp = 86401);
+        client.payout();
+        client.contribute(&member, &100_000_000);
+
+        let sym = Symbol::new(&env, "contribution_made");
+        let found = env.events().all().iter().any(|(_, topics, data)| {
+            if topics.len() != 1 { return false; }
+            let Ok(t) = Symbol::try_from_val(&env, &topics.get(0).unwrap()) else { return false; };
+            if t != sym { return false; }
+            let Ok((m, amount, cycle)) = <(Address, i128, u32)>::try_from_val(&env, data) else { return false; };
+            m == member && amount == 100_000_000 && cycle == 2
+        });
+        assert!(
+            found,
+            "'contribution_made' event schema changed: expected (member: Address, amount: i128, cycle: u32)"
+        );
     }
 }
 
