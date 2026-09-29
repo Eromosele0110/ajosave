@@ -10,8 +10,10 @@
 import { query } from "./db";
 import logger from "./logger";
 import type { KycStatus } from "./kyc";
+import { outboundPolicy, safeFetch } from "./ssrf";
 
 const BASE_URL = "https://testapi.smileidentity.com/v1";
+const KYC_POLICY = outboundPolicy({ allowedHosts: ["testapi.smileidentity.com"] });
 export const DEFAULT_STALE_MINUTES = 30;
 export const DEFAULT_BATCH_LIMIT = 100;
 
@@ -23,12 +25,12 @@ export async function fetchSmileJobStatus(userId: string) {
   const apiKey = process.env.SMILE_API_KEY;
   if (!partnerId || !apiKey) throw new Error("Missing Smile Identity credentials");
 
-  const res = await fetch(`${BASE_URL}/job_status`, {
+  const res = await safeFetch(`${BASE_URL}/job_status`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ partner_id: partnerId, api_key: apiKey, user_id: userId, job_id: userId }),
     signal: AbortSignal.timeout(10_000),
-  });
+  }, KYC_POLICY);
   if (!res.ok) throw new Error(`Smile Identity job_status failed: HTTP ${res.status}`);
   const data = (await res.json()) as { job_complete?: boolean; result?: { ResultCode?: string } };
   if (!data.job_complete) return null;

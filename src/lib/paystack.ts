@@ -6,6 +6,7 @@ import { getCorrelationId } from "./correlation";
 
 const client = axios.create({
   baseURL: "https://api.paystack.co",
+  maxRedirects: 0,
   headers: { Authorization: `Bearer ${serverConfig.paystack.secretKey}` },
 });
 

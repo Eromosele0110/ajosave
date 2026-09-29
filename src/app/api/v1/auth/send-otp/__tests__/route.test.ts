@@ -11,6 +11,11 @@ jest.mock("@/lib/sms", () => ({ sendOtp: jest.fn().mockResolvedValue("123456") }
 jest.mock("@/lib/lockout", () => ({
   getLockoutStatus: jest.fn().mockResolvedValue({ isLocked: false, attempts: 0, remainingAttempts: 5 }),
 }));
+jest.mock("@/lib/otp-abuse", () => ({
+  checkOtpSendAllowed: jest.fn().mockResolvedValue({ allowed: true }),
+  releaseOtpSendCooldown: jest.fn().mockResolvedValue(undefined),
+  getClientIp: jest.fn().mockReturnValue("203.0.113.9"),
+}));
 jest.mock("@/lib/redis", () => ({
   getRedis: jest.fn().mockResolvedValue({
     set: jest.fn().mockResolvedValue("OK"),
@@ -50,6 +55,41 @@ describe("POST /api/v1/auth/send-otp — rate limiting", () => {
   it("returns 200 for valid phone", async () => {
     const res = await POST(makeReq({ phone: "+2348012345678" }) as any);
     expect(res.status).toBe(200);
+  });
+
+  it("checks the abuse controls with the phone and client IP before sending", async () => {
+    const { checkOtpSendAllowed } = require("@/lib/otp-abuse");
+    const { sendOtp } = require("@/lib/sms");
+    await POST(makeReq({ phone: "+2348012345678" }) as any);
+    expect(checkOtpSendAllowed).toHaveBeenCalledWith("+2348012345678", "203.0.113.9");
+    expect(sendOtp).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns 429 with Retry-After and sends no SMS when an abuse limit is hit", async () => {
+    const { checkOtpSendAllowed } = require("@/lib/otp-abuse");
+    const { sendOtp } = require("@/lib/sms");
+    const { NextResponse } = require("next/server");
+    checkOtpSendAllowed.mockResolvedValueOnce({
+      allowed: false,
+      reason: "cooldown",
+      retryAfterSeconds: 42,
+      message: "Please wait 42 seconds before requesting another code.",
+    });
+    const res = await POST(makeReq({ phone: "+2348012345678" }) as any);
+    expect(res.status).toBe(429);
+    expect(NextResponse.json).toHaveBeenLastCalledWith(
+      { success: false, error: "Please wait 42 seconds before requesting another code." },
+      { status: 429, headers: { "Retry-After": "42" } }
+    );
+    expect(sendOtp).not.toHaveBeenCalled();
+  });
+
+  it("releases the resend cooldown when the SMS provider fails", async () => {
+    const { releaseOtpSendCooldown } = require("@/lib/otp-abuse");
+    const { sendOtp } = require("@/lib/sms");
+    sendOtp.mockRejectedValueOnce(new Error("termii down"));
+    await expect(POST(makeReq({ phone: "+2348012345678" }) as any)).rejects.toThrow("termii down");
+    expect(releaseOtpSendCooldown).toHaveBeenCalledWith("+2348012345678");
   });
 
   it("withRateLimit is applied with 5 req/min limit", () => {

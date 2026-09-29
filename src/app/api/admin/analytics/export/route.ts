@@ -1,65 +1,46 @@
 import { NextRequest, NextResponse } from "next/server";
 import { adminGetPerCircleAnalytics } from "@/server/services/analytics.service";
 import { withAdminAuth, withErrorHandler } from "@/server/middleware";
+import { createCsvStream, exportResponseHeaders } from "@/lib/streaming-export";
+
+const COLUMNS = [
+  { key: "circleId", header: "Circle ID" },
+  { key: "circleName", header: "Circle Name" },
+  { key: "creatorId", header: "Creator ID" },
+  { key: "status", header: "Status" },
+  { key: "totalContributionsCount", header: "Total Contributions Count" },
+  { key: "confirmedContributionsCount", header: "Confirmed Contributions Count" },
+  { key: "missedContributionsCount", header: "Missed Contributions Count" },
+  { key: "totalSaved", header: "Total Saved (USDC)" },
+  { key: "completionRate", header: "Completion Rate (%)" },
+  { key: "defaultRate", header: "Default Rate (%)" },
+  { key: "activeMembersCount", header: "Active Members Count" },
+  { key: "defaultedMembersCount", header: "Defaulted Members Count" },
+] as const;
 
 export const GET = withErrorHandler(
   withAdminAuth(async (_req: NextRequest) => {
     const data = await adminGetPerCircleAnalytics();
 
-    const headers = [
-      "Circle ID",
-      "Circle Name",
-      "Creator ID",
-      "Status",
-      "Total Contributions Count",
-      "Confirmed Contributions Count",
-      "Missed Contributions Count",
-      "Total Saved (USDC)",
-      "Completion Rate (%)",
-      "Default Rate (%)",
-      "Active Members Count",
-      "Defaulted Members Count"
-    ];
+    const records = data.map((row) => ({
+      circleId: row.circleId,
+      circleName: row.circleName,
+      creatorId: row.creatorId,
+      status: row.status,
+      totalContributionsCount: row.totalContributionsCount,
+      confirmedContributionsCount: row.confirmedContributionsCount,
+      missedContributionsCount: row.missedContributionsCount,
+      totalSaved: row.totalSaved,
+      completionRate: row.completionRate,
+      defaultRate: row.defaultRate,
+      activeMembersCount: row.activeMembersCount,
+      defaultedMembersCount: row.defaultedMembersCount,
+    }));
 
-    const escapeCsv = (val: unknown) => {
-      if (val === null || val === undefined) return "";
-      const str = String(val);
-      if (str.includes(",") || str.includes('"') || str.includes("\n") || str.includes("\r")) {
-        return `"${str.replace(/"/g, '""')}"`;
-      }
-      return str;
-    };
-
-    const csvRows = [
-      headers.join(","),
-      ...data.map((row) =>
-        [
-          row.circleId,
-          row.circleName,
-          row.creatorId,
-          row.status,
-          row.totalContributionsCount,
-          row.confirmedContributionsCount,
-          row.missedContributionsCount,
-          row.totalSaved,
-          row.completionRate,
-          row.defaultRate,
-          row.activeMembersCount,
-          row.defaultedMembersCount
-        ]
-          .map(escapeCsv)
-          .join(",")
-      ),
-    ];
-
-    const csvContent = csvRows.join("\n");
-
-    return new NextResponse(csvContent, {
+    const filename = `circle_performance_analytics_${new Date().toISOString().split("T")[0]}`;
+    return new NextResponse(createCsvStream(records, { columns: [...COLUMNS] }), {
       status: 200,
-      headers: {
-        "Content-Type": "text/csv; charset=utf-8",
-        "Content-Disposition": `attachment; filename="circle_performance_analytics_${new Date().toISOString().split("T")[0]}.csv"`,
-      },
+      headers: exportResponseHeaders(filename),
     });
   })
 );

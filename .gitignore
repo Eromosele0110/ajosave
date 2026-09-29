@@ -1,27 +1,59 @@
+# ─── Dependencies ─────────────────────────────────────────────────────────────
 node_modules/
+
+# ─── Next.js build output ─────────────────────────────────────────────────────
 .next/
 out/
 dist/
+build/
+
+# ─── Environment files ────────────────────────────────────────────────────────
 .env
 .env.local
 .env.*.local
+
+# ─── Logs ─────────────────────────────────────────────────────────────────────
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ─── OS & editor artefacts ────────────────────────────────────────────────────
 .DS_Store
-coverage/
-contracts/target/
+Thumbs.db
+.vscode/
+.idea/
+
+# ─── TypeScript ───────────────────────────────────────────────────────────────
 *.tsbuildinfo
 next-env.d.ts
 
-# Playwright
-playwright-report/
+# ─── Test coverage & results ──────────────────────────────────────────────────
+coverage/
+.nyc_output/
 test-results/
+*.test-results/
+
+# ─── Jest / Vitest snapshots ──────────────────────────────────────────────────
+**/__snapshots__/
+**/*.snap
+
+# ─── Playwright ───────────────────────────────────────────────────────────────
+playwright-report/
 # Actual screenshots from visual regression runs (only baselines are committed)
 e2e/visual/__snapshots__/**/*-actual.png
 e2e/visual/__snapshots__/**/*-diff.png
 
-# Jest snapshots
-**/__snapshots__/
-*.snap
+# ─── OWASP ZAP DAST reports ───────────────────────────────────────────────────
+zap-reports/
+report_html.html
+report_json.json
+report_md.md
+report_sarif.sarif
 
-# Kiro AI agent workspace
-.kiro/
+# ─── Rust / Soroban contract artefacts ────────────────────────────────────────
+contracts/target/
+
+# ─── Misc ─────────────────────────────────────────────────────────────────────
+*.tgz
+.cache/

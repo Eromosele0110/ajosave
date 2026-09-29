@@ -1,6 +1,7 @@
 import { contract, Keypair, Networks } from "@stellar/stellar-sdk";
 import { serverConfig } from "@/server/config";
 import { wrapWithFeeBump } from "@/lib/stellar";
+import { safeFetch } from "@/lib/ssrf";
 import { execSync } from "child_process";
 import * as path from "path";
 import * as fs from "fs";
@@ -28,7 +29,7 @@ export async function getContractEvents(
   startLedger?: number,
   pageSize: number = 100
 ): Promise<ContractEvent[]> {
-  const response = await fetch(rpcUrl, {
+  const response = await safeFetch(rpcUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({

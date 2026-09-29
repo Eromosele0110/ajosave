@@ -77,6 +77,28 @@ export interface CircleMessage {
   createdAt: Date;
 }
 
+// ─── Circle discovery filters ─────────────────────────────────────────────────
+
+/**
+ * Filter parameters accepted by GET /api/v1/circles.
+ *
+ * All fields are optional — omitting a field means "no constraint".
+ * - `status`            Filter by circle lifecycle status.
+ * - `frequency`         Filter by contribution cycle frequency.
+ * - `minAmount`         Minimum contributionNgn (inclusive).
+ * - `maxAmount`         Maximum contributionNgn (inclusive).
+ * - `maxMembers`        Exact maximum-member count (e.g. show only 5-person circles).
+ * - `search`            Case-insensitive substring match against circle name.
+ */
+export interface CircleFilters {
+  status?: CircleStatus;
+  frequency?: CycleFrequency;
+  minAmount?: number;
+  maxAmount?: number;
+  maxMembers?: number;
+  search?: string;
+}
+
 // ─── API ──────────────────────────────────────────────────────────────────────
 export interface ApiSuccess<T> {
   success: true;
