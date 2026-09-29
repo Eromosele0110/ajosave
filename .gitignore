@@ -18,3 +18,10 @@ test-results/
 # Actual screenshots from visual regression runs (only baselines are committed)
 e2e/visual/__snapshots__/**/*-actual.png
 e2e/visual/__snapshots__/**/*-diff.png
+
+# Jest snapshots
+**/__snapshots__/
+*.snap
+
+# Kiro AI agent workspace
+.kiro/
