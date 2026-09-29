@@ -2,6 +2,8 @@ import { transaction } from "@/lib/db";
 import { sendEmail } from "@/lib/email";
 import { logAuditAction } from "./audit.service";
 import { serverConfig } from "@/server/config";
+import { getRedis } from "@/lib/redis";
+import { revokeAllSessions } from "@/lib/sessions";
 
 /**
  * Anonymizes all PII for a user while preserving financial records for audit.
@@ -10,18 +12,25 @@ import { serverConfig } from "@/server/config";
  * - Deletes: phone, email, display_name, stellar_public_key
  * - Preserves: contributions, payouts, circle membership (anonymized)
  * - Audit log entry created for the deletion
+ * - Revokes every session (and denylists issued JWTs) so a stale token cannot keep acting
+ *   for, or export data of, a deleted account
+ * - Purges the phone-keyed OTP / lockout / send-limit state from Redis
+ *
+ * Exports are streamed on demand and never stored, so there are no export files to delete
+ * (#110); see `docs/security-controls.md`.
  */
 export async function deleteUserData(userId: string): Promise<{ email: string | null }> {
   const anonymizedName = `deleted-user-${userId.slice(0, 8)}`;
 
-  const { email } = await transaction(async (q) => {
-    // Fetch email before wiping it (needed for confirmation email)
-    const { rows } = await q<{ email: string | null }>(
-      "SELECT email FROM users WHERE id = $1",
+  const { email, phone } = await transaction(async (q) => {
+    // Fetch email and phone before wiping them (email for the confirmation message,
+    // phone to purge the Redis state keyed by it)
+    const { rows } = await q<{ email: string | null; phone: string | null }>(
+      "SELECT email, phone FROM users WHERE id = $1",
       [userId]
     );
     if (!rows[0]) throw new Error("User not found");
-    const { email } = rows[0];
+    const { email, phone } = rows[0];
 
     // Anonymize PII — preserve id, role, reputation_score, created_at for audit
     await q(
@@ -38,8 +47,10 @@ export async function deleteUserData(userId: string): Promise<{ email: string | 
     // Soft-delete active sessions by invalidating refresh tokens
     await q("DELETE FROM refresh_tokens WHERE user_id = $1", [userId]);
 
-    return { email };
+    return { email, phone: phone ?? null };
   });
+
+  await purgeAuthResidue(userId, phone);
 
   // Audit log (outside transaction — non-critical)
   await logAuditAction(userId, "DELETE_USER", "USER", userId, {
@@ -47,6 +58,37 @@ export async function deleteUserData(userId: string): Promise<{ email: string | 
   }).catch(() => {});
 
   return { email };
+}
+
+/** Redis keys that hold state for a phone number (see otp routes, lockout and otp-abuse). */
+export function phoneKeyedRedisKeys(phone: string): string[] {
+  return [
+    `otp:${phone}`,
+    `lockout:${phone}`,
+    `otp_failures:${phone}`,
+    `otp_cooldown:${phone}`,
+    `otp_daily:${phone}`,
+  ];
+}
+
+/**
+ * Best-effort cleanup after the database has been anonymized. Failures are logged rather than
+ * thrown: the PII is already gone and the deletion must not appear to fail because of a cache.
+ */
+async function purgeAuthResidue(userId: string, phone: string | null): Promise<void> {
+  try {
+    await revokeAllSessions(userId);
+  } catch (err) {
+    console.error("[user-deletion] Failed to revoke sessions:", err);
+  }
+
+  if (!phone || phone.startsWith("deleted-")) return;
+  try {
+    const redis = await getRedis();
+    await redis.del(phoneKeyedRedisKeys(phone));
+  } catch (err) {
+    console.error("[user-deletion] Failed to purge phone-keyed Redis state:", err);
+  }
 }
 
 export async function sendDeletionConfirmationEmail(email: string): Promise<void> {

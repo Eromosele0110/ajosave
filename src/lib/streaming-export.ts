@@ -80,7 +80,11 @@ export function exportResponseHeaders(filename: string): Record<string, string> 
   return {
     "Content-Type": "text/csv; charset=utf-8",
     "Content-Disposition": `attachment; filename="${safeExportFilename(filename)}"`,
+    // Exports carry personal and financial data: never let a browser, proxy or CDN keep a copy.
     "Cache-Control": "no-store, private",
+    Pragma: "no-cache",
+    Expires: "0",
     "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "default-src 'none'; sandbox",
   };
 }
