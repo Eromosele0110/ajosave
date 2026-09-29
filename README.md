@@ -124,7 +124,8 @@ git clone https://github.com/joekeyz8/ajosave.git
 cd stellar
 npm install
 cp .env.example .env.local
-# Fill in environment variables
+# Fill in environment variables — see docs/environment-variables.md for what
+# each one does and which are required in production
 npm run dev
 ```
 
